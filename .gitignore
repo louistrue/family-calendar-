@@ -1,0 +1,26 @@
+# ESP32 / PlatformIO
+esp32/.pio/
+esp32/.vscode/
+esp32/lib/
+esp32/test/
+
+# Secrets - NEVER commit these
+esp32/include/secrets.h
+
+# API
+api/node_modules/
+api/.vercel/
+api/.env
+api/.env.local
+
+# IDE
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build artifacts
+*.o
+*.elf
+*.bin
+*.hex

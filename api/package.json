@@ -1,0 +1,20 @@
+{
+  "name": "family-calendar-api",
+  "version": "1.0.0",
+  "description": "Proxy API for fetching and caching ICS calendars",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'No build step required'",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
