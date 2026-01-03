@@ -42,7 +42,7 @@ const calendars: CalendarConfig[] = [
   },
 ].filter((cal) => cal.url);
 
-async function fetchICS(config: CalendarConfig): Promise<CalendarEvent[]> {
+async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date): Promise<CalendarEvent[]> {
   try {
     const response = await fetch(config.url, {
       next: { revalidate: 300 }, // Cache for 5 minutes
@@ -56,72 +56,116 @@ async function fetchICS(config: CalendarConfig): Promise<CalendarEvent[]> {
     const icsData = await response.text();
     const jcalData = ICAL.parse(icsData);
     const comp = new ICAL.Component(jcalData);
-    const events: CalendarEvent[] = [];
+    const params: CalendarEvent[] = [];
 
+    // Group events by UID to handle overrides
+    const eventsByUid = new Map<string, ICAL.Component[]>();
     const vevents = comp.getAllSubcomponents('vevent');
 
     for (const vevent of vevents) {
-      const event = new ICAL.Event(vevent);
+      const uid = vevent.getFirstPropertyValue('uid');
+      if (!eventsByUid.has(uid)) {
+        eventsByUid.set(uid, []);
+      }
+      eventsByUid.get(uid)?.push(vevent);
+    }
 
-      // Handle recurring events
-      if (event.isRecurring()) {
-        const start = new Date();
-        start.setMonth(start.getMonth() - 1);
-        const end = new Date();
-        end.setMonth(end.getMonth() + 3);
+    for (const [uid, components] of eventsByUid) {
+      // Find master event (no recurrence-id)
+      const masterComp = components.find(c => !c.getFirstPropertyValue('recurrence-id'));
+      const exceptions = components.filter(c => c.getFirstPropertyValue('recurrence-id'));
 
-        const iterator = event.iterator();
-        let next;
-        let count = 0;
-        const maxOccurrences = 100;
+      // Helper to process a single event instance
+      const processEvent = (event: ICAL.Event, start: Date, end: Date) => {
+        // Skip cancelled
+        if (event.summary && event.summary.includes('Canceled:')) return;
+        const status = event.component.getFirstPropertyValue('status');
+        if (status === 'CANCELLED') return;
 
-        while ((next = iterator.next()) && count < maxOccurrences) {
-          const occurrenceStart = next.toJSDate();
+        // Check if fully outside range
+        if (end < rangeStart || start > rangeEnd) return;
 
-          if (occurrenceStart > end) break;
-          if (occurrenceStart < start) continue;
+        params.push({
+          id: `${config.name}-${event.uid}-${start.getTime()}`,
+          title: event.summary || 'Untitled',
+          start: start.toISOString(),
+          end: end.toISOString(),
+          allDay: event.startDate.isDate,
+          calendar: config.name,
+          color: config.color,
+          location: event.location || undefined,
+          description: event.description || undefined,
+        });
+      };
 
-          const duration = event.duration;
-          const occurrenceEnd = new Date(
-            occurrenceStart.getTime() + duration.toSeconds() * 1000
-          );
+      // 1. Process Master Event (Expansion)
+      if (masterComp) {
+        const masterEvent = new ICAL.Event(masterComp);
 
-          events.push({
-            id: `${event.uid}-${occurrenceStart.toISOString()}`,
-            title: event.summary || 'Untitled',
-            start: occurrenceStart.toISOString(),
-            end: occurrenceEnd.toISOString(),
-            allDay: event.startDate.isDate,
-            calendar: config.name,
-            color: config.color,
-            location: event.location || undefined,
-            description: event.description || undefined,
-          });
+        // Skip master if cancelled
+        if (masterEvent.component.getFirstPropertyValue('status') === 'CANCELLED') {
+          // If master is cancelled, do we skip overrides? usually yes, but let's be safe.
+          // Actually if master is cancelled, the whole series is usually dead.
+        } else if (masterEvent.isRecurring()) {
+          const iterator = masterEvent.iterator();
+          let next;
+          let count = 0;
+          const maxOccurrences = 500;
 
-          count++;
+          // Track exception dates (recurrence-ids) to skip them in expansion
+          const exceptionDates = new Set<number>();
+          for (const ex of exceptions) {
+            const rid = ex.getFirstPropertyValue('recurrence-id');
+            if (rid) exceptionDates.add(rid.toJSDate().getTime());
+          }
+
+          while ((next = iterator.next()) && count < maxOccurrences) {
+            const start = next.toJSDate();
+
+            // If this date is covered by an exception (override), skip it here
+            // (The exception will be processed separately or is a cancellation)
+            if (exceptionDates.has(start.getTime())) {
+              continue;
+            }
+
+            if (start > rangeEnd) break;
+
+            const duration = masterEvent.duration;
+            const end = new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
+
+            if (end < rangeStart) continue;
+
+            processEvent(masterEvent, start, end); // Use shared helper but careful with overrides
+            count++;
+          }
+        } else {
+          // Master is not recurring
+          const start = masterEvent.startDate.toJSDate();
+          const duration = masterEvent.duration;
+          const end = masterEvent.endDate ? masterEvent.endDate.toJSDate() :
+            new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
+          processEvent(masterEvent, start, end);
         }
-      } else {
-        // Non-recurring event
-        const startDate = event.startDate?.toJSDate();
-        const endDate = event.endDate?.toJSDate();
+      }
 
-        if (startDate) {
-          events.push({
-            id: event.uid,
-            title: event.summary || 'Untitled',
-            start: startDate.toISOString(),
-            end: endDate?.toISOString() || startDate.toISOString(),
-            allDay: event.startDate.isDate,
-            calendar: config.name,
-            color: config.color,
-            location: event.location || undefined,
-            description: event.description || undefined,
-          });
-        }
+      // 2. Process Exceptions (Overrides) independently
+      // These are specific instances (moves) or single separate events
+      for (const exComp of exceptions) {
+        const exEvent = new ICAL.Event(exComp);
+        // Recurrence-ID exists, meaning it replaces a specific instance.
+        // We already skipped the "original" time in the master loop above.
+        // Now just add this event as is (if not cancelled).
+
+        const start = exEvent.startDate.toJSDate();
+        const duration = exEvent.duration;
+        const end = exEvent.endDate ? exEvent.endDate.toJSDate() :
+          new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
+
+        processEvent(exEvent, start, end);
       }
     }
 
-    return events;
+    return params;
   } catch (error) {
     console.error(`Error fetching ${config.name}:`, error);
     return [];
@@ -132,6 +176,11 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const from = searchParams.get('from');
   const to = searchParams.get('to');
+
+  // Define strict expansion window based on request
+  // Default to [Now - 1 month, Now + 6 months] if not provided
+  const rangeStart = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const rangeEnd = to ? new Date(to) : new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
 
   // Security check
   const apiSecret = process.env.API_SECRET;
@@ -145,21 +194,19 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Fetch all calendars in parallel
-    const allEventsArrays = await Promise.all(calendars.map(fetchICS));
+    // Fetch all calendars in parallel, passing the range constraints
+    const allEventsArrays = await Promise.all(
+      calendars.map(config => fetchICS(config, rangeStart, rangeEnd))
+    );
+
     let events = allEventsArrays.flat();
 
-    // Filter by date range if provided
-    if (from && to) {
-      const fromDate = new Date(from);
-      const toDate = new Date(to);
-
-      events = events.filter((event) => {
-        const eventStart = new Date(event.start);
-        const eventEnd = new Date(event.end);
-        return eventStart <= toDate && eventEnd >= fromDate;
-      });
-    }
+    // Final filter to be absolutely safe (redundant but cheap)
+    events = events.filter((event) => {
+      const eventStart = new Date(event.start);
+      const eventEnd = new Date(event.end);
+      return eventStart < rangeEnd && eventEnd > rangeStart;
+    });
 
     // Sort by start time
     events.sort(

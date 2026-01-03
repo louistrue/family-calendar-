@@ -19,226 +19,208 @@
 
 // Display
 static LGFX tft;
-static LGFX_Sprite canvas(&tft);
 
 // Screen dimensions
 #define SCREEN_WIDTH 1024
 #define SCREEN_HEIGHT 600
+#define HEADER_HEIGHT 50
+#define HOUR_HEIGHT_WEEK 48
+#define HOUR_HEIGHT_DAY 48  // FIXED: Match Simulator (48px)
 
 // Colors
-#define COLOR_BG        0x1084  // Dark gray
-#define COLOR_HEADER    0x2104  // Slightly lighter
-#define COLOR_TODAY     0x4208  // Highlight for today
-#define COLOR_TEXT      0xFFFF  // White
-#define COLOR_TEXT_DIM  0x8410  // Gray text
-#define COLOR_GRID      0x3186  // Grid lines
-#define COLOR_NOW       0xF800  // Red for current time indicator
+#define COLOR_BG        0x0842  // Very dark blue/black
+#define COLOR_HEADER    0x1084  
+#define COLOR_TODAY     0x4208  
+#define COLOR_TEXT      0xFFFF  
+#define COLOR_TEXT_DIM  0x9CDF  
+#define COLOR_GRID      0x2945  
+#define COLOR_NOW       0xF800  
+#define COLOR_ACCENT    0x634F 
+#define COLOR_DIM_TEXT  0x39E7
 
-// View modes
 enum ViewMode { VIEW_DAY, VIEW_WEEK, VIEW_MONTH };
-ViewMode currentView = VIEW_WEEK;
 
-// Calendar event structure
 struct CalEvent {
-  String id;
   String title;
   time_t start;
   time_t end;
-  bool allDay;
-  String calendar;
   uint16_t color;
+  String location;
+  bool allDay;
 };
 
-// Event storage
-#define MAX_EVENTS 200
-CalEvent events[MAX_EVENTS];
-int eventCount = 0;
-
-// Calendar info
 struct CalInfo {
   String name;
   uint16_t color;
+  String id;
 };
-CalInfo calendars[4];
-int calendarCount = 0;
 
-// Current date navigation
+// Globals
+ViewMode currentView = VIEW_WEEK;
 struct tm viewDate;
+unsigned long lastRefresh = 0;
+
+std::vector<CalEvent> events;
+std::vector<CalInfo> calendars;
+
+const char* monthNames[] = {"Januar", "Februar", "Maerz", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"};
+const char* dayNamesShort[] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
+const char* dayNamesLong[] = {"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"};
 
 // Touch state
 int touchX = -1, touchY = -1;
+int touchStartX = -1, touchStartY = -1;
 bool touched = false;
 unsigned long lastTouch = 0;
 
-// Refresh timer
-unsigned long lastRefresh = 0;
+// Forward declarations
+void draw();
+void fetchEvents();
 
-// Convert hex color string to RGB565
-uint16_t hexToRGB565(const String& hex) {
-  String h = hex;
-  if (h.startsWith("#")) h = h.substring(1);
-
-  long rgb = strtol(h.c_str(), NULL, 16);
-  uint8_t r = (rgb >> 16) & 0xFF;
-  uint8_t g = (rgb >> 8) & 0xFF;
-  uint8_t b = rgb & 0xFF;
-
-  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+// Helpers
+uint16_t hexToRGB(String hex) {
+  if (hex.startsWith("#")) hex = hex.substring(1);
+  long number = strtol(hex.c_str(), NULL, 16);
+  uint8_t r = (number >> 16) & 0xFF;
+  uint8_t g = (number >> 8) & 0xFF;
+  uint8_t b = number & 0xFF;
+  return tft.color565(r, g, b);
 }
 
-// Parse ISO8601 datetime to time_t
-time_t parseISO8601(const String& iso) {
+time_t parseISO(String iso) {
   struct tm t = {0};
-  sscanf(iso.c_str(), "%d-%d-%dT%d:%d:%d",
-         &t.tm_year, &t.tm_mon, &t.tm_mday,
-         &t.tm_hour, &t.tm_min, &t.tm_sec);
-  t.tm_year -= 1900;
-  t.tm_mon -= 1;
-  return mktime(&t);
+  strptime(iso.c_str(), "%Y-%m-%dT%H:%M:%S", &t);
+  return mktime(&t); // Assumes local time or needs adjustment if UTC
 }
 
-// Get start of day
-time_t startOfDay(struct tm* t) {
-  struct tm day = *t;
-  day.tm_hour = 0;
-  day.tm_min = 0;
-  day.tm_sec = 0;
-  return mktime(&day);
-}
-
-// Get current time
-void updateTime() {
-  time_t now;
-  time(&now);
-  localtime_r(&now, &viewDate);
-}
-
-// Connect to WiFi
 bool connectWiFi() {
-  tft.setTextSize(2);
-  tft.setTextColor(COLOR_TEXT);
-  tft.setCursor(20, SCREEN_HEIGHT / 2);
-  tft.print("Connecting to WiFi...");
-
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+  int tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 20) {
     delay(500);
-    tft.print(".");
-    attempts++;
+    tries++;
   }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    tft.println(" Connected!");
-    delay(500);
-    return true;
-  }
-
-  tft.println(" Failed!");
-  return false;
+  return WiFi.status() == WL_CONNECTED;
 }
 
-// Sync time from NTP
 void syncTime() {
   configTime(GMT_OFFSET * 3600, DST_OFFSET * 3600, NTP_SERVER);
-
-  tft.setCursor(20, SCREEN_HEIGHT / 2 + 40);
-  tft.print("Syncing time...");
-
   struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 10000)) {
-    tft.println(" OK");
-    viewDate = timeinfo;
-  } else {
-    tft.println(" Failed");
+  if(!getLocalTime(&timeinfo)){
+    return;
   }
-  delay(500);
+  viewDate = timeinfo;
 }
 
-// Fetch events from API
-bool fetchEvents() {
-  if (WiFi.status() != WL_CONNECTED) return false;
+int getEventsForDay(time_t dayStart, CalEvent** outEvents, int maxEvents) {
+  struct tm dayTm;
+  localtime_r(&dayStart, &dayTm);
+  dayTm.tm_hour = 0; dayTm.tm_min = 0; dayTm.tm_sec = 0;
+  time_t dayMin = mktime(&dayTm);
+  dayTm.tm_hour = 23; dayTm.tm_min = 59; dayTm.tm_sec = 59;
+  time_t dayMax = mktime(&dayTm);
 
-  HTTPClient http;
-
-  // Calculate date range (1 month before to 2 months after)
-  struct tm from = viewDate;
-  from.tm_mon -= 1;
-  from.tm_mday = 1;
-  mktime(&from);
-
-  struct tm to = viewDate;
-  to.tm_mon += 2;
-  to.tm_mday = 1;
-  mktime(&to);
-
-  char url[256];
-  snprintf(url, sizeof(url), "%s?from=%04d-%02d-%02d&to=%04d-%02d-%02d",
-           API_URL,
-           from.tm_year + 1900, from.tm_mon + 1, from.tm_mday,
-           to.tm_year + 1900, to.tm_mon + 1, to.tm_mday);
-
-  http.begin(url);
-  http.addHeader("x-api-key", API_SECRET);
-  http.setTimeout(15000);
-
-  int httpCode = http.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    http.end();
-    return false;
-  }
-
-  String payload = http.getString();
-  http.end();
-
-  // Parse JSON
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, payload);
-  if (error) return false;
-
-  // Parse calendars
-  calendarCount = 0;
-  JsonArray cals = doc["calendars"];
-  for (JsonObject cal : cals) {
-    if (calendarCount < 4) {
-      calendars[calendarCount].name = cal["name"].as<String>();
-      calendars[calendarCount].color = hexToRGB565(cal["color"].as<String>());
-      calendarCount++;
+  int count = 0;
+  for (auto& e : events) {
+    if (e.start < dayMax && e.end > dayMin) {
+      if (count < maxEvents) {
+        outEvents[count++] = &e;
+      }
     }
   }
-
-  // Parse events
-  eventCount = 0;
-  JsonArray evts = doc["events"];
-  for (JsonObject evt : evts) {
-    if (eventCount >= MAX_EVENTS) break;
-
-    events[eventCount].id = evt["id"].as<String>();
-    events[eventCount].title = evt["title"].as<String>();
-    events[eventCount].start = parseISO8601(evt["start"].as<String>());
-    events[eventCount].end = parseISO8601(evt["end"].as<String>());
-    events[eventCount].allDay = evt["allDay"].as<bool>();
-    events[eventCount].calendar = evt["calendar"].as<String>();
-    events[eventCount].color = hexToRGB565(evt["color"].as<String>());
-    eventCount++;
-  }
-
-  lastRefresh = millis();
-  return true;
+  return count;
 }
+
+bool fetchEvents() {
+    if(WiFi.status() != WL_CONNECTED) return false;
+    
+    HTTPClient http;
+    // Construct URL with range
+    // Simplify: just fetch -1 month to +2 months from now
+    time_t now; time(&now);
+    struct tm startTm; localtime_r(&now, &startTm);
+    startTm.tm_mon -= 1; mktime(&startTm);
+    struct tm endTm; localtime_r(&now, &endTm);
+    endTm.tm_mon += 2; mktime(&endTm);
+    
+    char url[256];
+    char startIso[30], endIso[30];
+    strftime(startIso, sizeof(startIso), "%Y-%m-%dT%H:%M:%SZ", &startTm);
+    strftime(endIso, sizeof(endIso), "%Y-%m-%dT%H:%M:%SZ", &endTm);
+    
+    snprintf(url, sizeof(url), "%s?from=%s&to=%s", API_URL, startIso, endIso);
+    
+    http.begin(url);
+    http.addHeader("x-api-key", API_SECRET);
+    
+    int code = http.GET();
+    if(code == HTTP_CODE_OK) {
+        String payload = http.getString();
+        DynamicJsonDocument doc(32768); // ~32KB buffer
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if(!error) {
+            events.clear();
+            JsonArray evts = doc["events"];
+            for(JsonVariant v : evts) {
+                CalEvent e;
+                e.title = v["title"].as<String>();
+                e.start = parseISO(v["start"].as<String>());
+                e.end = parseISO(v["end"].as<String>());
+                e.color = hexToRGB(v["color"].as<String>());
+                e.location = v["location"] | "";
+                e.allDay = v["allDay"];
+                events.push_back(e);
+            }
+            
+            calendars.clear();
+            JsonArray cals = doc["calendars"];
+            for(JsonVariant c : cals) {
+               CalInfo ci;
+               ci.name = c["name"].as<String>();
+               ci.color = hexToRGB(c["color"].as<String>());
+               calendars.push_back(ci);
+            }
+            lastRefresh = millis();
+            http.end();
+            return true;
+        }
+    }
+    http.end();
+    return false;
+}
+
+void drawLegend() {
+   // Floating legend logic
+   int num = calendars.size();
+   int totalW = 0;
+   // Measure? Approximation
+   // Fixed width per item?
+   int itemW = 120; 
+   int x = (SCREEN_WIDTH - (num * itemW)) / 2;
+   int y = SCREEN_HEIGHT - 30; // Bottom
+   
+   for(auto& c : calendars) {
+       tft.fillCircle(x + 10, y + 10, 4, c.color);
+       tft.setTextColor(COLOR_TEXT_DIM);
+       tft.setTextSize(1);
+       tft.setCursor(x + 20, y + 6);
+       tft.print(c.name);
+       x += itemW;
+   }
+}
+
 
 // Draw header with navigation
 void drawHeader() {
-  // Background
-  tft.fillRect(0, 0, SCREEN_WIDTH, 50, COLOR_HEADER);
+  tft.fillRect(0, 0, SCREEN_WIDTH, HEADER_HEIGHT, COLOR_HEADER);
 
   // Left arrow
   tft.fillTriangle(20, 25, 40, 10, 40, 40, COLOR_TEXT);
 
-  // Month/Year title
+  // Title
   char title[32];
-  strftime(title, sizeof(title), "%B %Y", &viewDate);
+  snprintf(title, sizeof(title), "%s %d", monthNames[viewDate.tm_mon], viewDate.tm_year + 1900);
   tft.setTextColor(COLOR_TEXT);
   tft.setTextSize(3);
   tft.setCursor(80, 12);
@@ -253,11 +235,11 @@ void drawHeader() {
   int btnW = 70;
   int btnX = SCREEN_WIDTH - 250;
 
-  const char* labels[] = {"DAY", "WEEK", "MON"};
+  const char* labels[] = {"TAG", "WOCHE", "MON"};
   ViewMode modes[] = {VIEW_DAY, VIEW_WEEK, VIEW_MONTH};
 
   for (int i = 0; i < 3; i++) {
-    uint16_t bg = (currentView == modes[i]) ? 0x4A69 : COLOR_HEADER;
+    uint16_t bg = (currentView == modes[i]) ? COLOR_ACCENT : COLOR_HEADER;
     tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, bg);
     tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, COLOR_TEXT);
     tft.setTextSize(2);
@@ -267,157 +249,122 @@ void drawHeader() {
   }
 }
 
-// Draw calendar legend
-void drawLegend() {
-  int y = SCREEN_HEIGHT - 30;
-  int x = 20;
-
-  for (int i = 0; i < calendarCount; i++) {
-    tft.fillCircle(x, y, 8, calendars[i].color);
-    tft.setTextColor(COLOR_TEXT);
-    tft.setTextSize(1);
-    tft.setCursor(x + 15, y - 4);
-    tft.print(calendars[i].name);
-    x += 150;
-  }
-}
-
-// Get events for a specific day
-int getEventsForDay(time_t dayStart, CalEvent** dayEvents, int maxEvents) {
-  time_t dayEnd = dayStart + 86400;
-  int count = 0;
-
-  for (int i = 0; i < eventCount && count < maxEvents; i++) {
-    if (events[i].start < dayEnd && events[i].end > dayStart) {
-      dayEvents[count++] = &events[i];
-    }
-  }
-  return count;
-}
-
 // Draw month view
 void drawMonthView() {
   tft.fillScreen(COLOR_BG);
   drawHeader();
 
-  // Calculate first day of month
-  struct tm firstDay = viewDate;
-  firstDay.tm_mday = 1;
-  mktime(&firstDay);
+  struct tm firstOfMonth = viewDate;
+  firstOfMonth.tm_mday = 1;
+  mktime(&firstOfMonth);
 
-  // Get current day for highlighting
-  time_t now;
-  time(&now);
-  struct tm today;
-  localtime_r(&now, &today);
+  // Mon=0, Sun=6 adjustment
+  int startDayOfWeek = firstOfMonth.tm_wday - 1;
+  if (startDayOfWeek < 0) startDayOfWeek = 6;
 
-  int startY = 55;
+  struct tm gridStart = firstOfMonth;
+  gridStart.tm_mday -= startDayOfWeek;
+  mktime(&gridStart);
+
+  time_t now; time(&now);
+  struct tm today; localtime_r(&now, &today);
+
+  // Metrics
+  int startY = 80; // Below header + weekdays
   int cellW = SCREEN_WIDTH / 7;
-  int cellH = (SCREEN_HEIGHT - startY - 35) / 6;
+  int cellH = (SCREEN_HEIGHT - startY) / 6;
 
-  // Day headers
-  const char* days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  const char* weekDaysDe[] = {"Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"};
   tft.setTextColor(COLOR_TEXT_DIM);
   tft.setTextSize(2);
   for (int i = 0; i < 7; i++) {
-    tft.setCursor(i * cellW + cellW / 2 - 18, startY);
-    tft.print(days[i]);
+    tft.setCursor(i * cellW + 10, HEADER_HEIGHT + 5); 
+    tft.print(weekDaysDe[i]);
   }
-  startY += 25;
+  
+  // 42 cells
+  for (int i = 0; i < 42; i++) {
+    struct tm currentDay = gridStart;
+    currentDay.tm_mday += i;
+    time_t currentDayTime = mktime(&currentDay);
 
-  // Calculate days in month and starting weekday
-  int daysInMonth = 31;
-  struct tm test = firstDay;
-  test.tm_mday = 32;
-  mktime(&test);
-  daysInMonth = 32 - test.tm_mday;
+    int col = i % 7;
+    int row = i / 7;
+    int x = col * cellW;
+    int y = startY + row * cellH;
 
-  int startWeekday = firstDay.tm_wday;
+    bool isCurrentMonth = (currentDay.tm_mon == viewDate.tm_mon);
+    bool isToday = (currentDay.tm_mday == today.tm_mday &&
+                    currentDay.tm_mon == today.tm_mon &&
+                    currentDay.tm_year == today.tm_year);
 
-  // Draw calendar grid
-  int day = 1;
-  for (int row = 0; row < 6 && day <= daysInMonth; row++) {
-    for (int col = 0; col < 7; col++) {
-      int x = col * cellW;
-      int y = startY + row * cellH;
+    if (isToday) {
+      tft.fillRect(x, y, cellW, cellH, COLOR_TODAY);
+    } 
 
-      if ((row == 0 && col < startWeekday) || day > daysInMonth) {
-        // Empty cell
-        tft.drawRect(x, y, cellW, cellH, COLOR_GRID);
-        continue;
+    tft.drawRect(x, y, cellW, cellH, COLOR_GRID);
+
+    tft.setTextSize(2);
+    tft.setCursor(x + 5, y + 5);
+    
+    if (isToday) tft.setTextColor(0xFFFF); 
+    else if (isCurrentMonth) tft.setTextColor(COLOR_TEXT_DIM);
+    else tft.setTextColor(COLOR_DIM_TEXT); 
+
+    tft.print(currentDay.tm_mday);
+
+    CalEvent* dayEvents[5];
+    int numEvents = getEventsForDay(currentDayTime, dayEvents, 5);
+
+    int evtY = y + 28;
+    for (int e = 0; e < numEvents && evtY < y + cellH - 10; e++) {
+      uint16_t color = dayEvents[e]->color;
+      if (!isCurrentMonth) {
+         color = (color >> 1) & 0x7BEF; 
       }
-
-      // Check if this is today
-      bool isToday = (day == today.tm_mday &&
-                      viewDate.tm_mon == today.tm_mon &&
-                      viewDate.tm_year == today.tm_year);
-
-      uint16_t bg = isToday ? COLOR_TODAY : COLOR_BG;
-      tft.fillRect(x, y, cellW, cellH, bg);
-      tft.drawRect(x, y, cellW, cellH, COLOR_GRID);
-
-      // Day number
-      tft.setTextColor(isToday ? 0xFFE0 : COLOR_TEXT);
-      tft.setTextSize(2);
-      tft.setCursor(x + 5, y + 5);
-      tft.print(day);
-
-      // Events for this day
-      struct tm dayTm = firstDay;
-      dayTm.tm_mday = day;
-      time_t dayStart = mktime(&dayTm);
-
-      CalEvent* dayEvents[5];
-      int numEvents = getEventsForDay(dayStart, dayEvents, 5);
-
-      int evtY = y + 28;
-      for (int e = 0; e < numEvents && evtY < y + cellH - 10; e++) {
-        tft.fillRoundRect(x + 3, evtY, cellW - 6, 14, 2, dayEvents[e]->color);
-        tft.setTextColor(COLOR_TEXT);
-        tft.setTextSize(1);
-        tft.setCursor(x + 5, evtY + 3);
-
-        String title = dayEvents[e]->title;
-        if (title.length() > 12) title = title.substring(0, 11) + "..";
-        tft.print(title);
-        evtY += 16;
-      }
-
-      day++;
+      
+      tft.fillRoundRect(x + 3, evtY, cellW - 6, 14, 2, color);
+      tft.setTextColor(COLOR_TEXT);
+      tft.setTextSize(1);
+      tft.setCursor(x + 5, evtY + 3);
+      
+      String title = dayEvents[e]->title;
+      if (title.length() > 12) title = title.substring(0, 11) + "..";
+      tft.print(title);
+      evtY += 16;
     }
   }
 
   drawLegend();
 }
 
-// Draw week view
 void drawWeekView() {
   tft.fillScreen(COLOR_BG);
   drawHeader();
 
-  // Find start of week (Sunday)
+  int startHour = 7;
+  int endHour = 18; 
+  int hourH = HOUR_HEIGHT_WEEK;
+
   struct tm weekStart = viewDate;
-  weekStart.tm_mday -= weekStart.tm_wday;
-  weekStart.tm_hour = 0;
-  weekStart.tm_min = 0;
-  weekStart.tm_sec = 0;
+  int currentWday = weekStart.tm_wday; 
+  int daysSinceMon = currentWday - 1;
+  if (daysSinceMon < 0) daysSinceMon = 6;
+  
+  weekStart.tm_mday -= daysSinceMon;
+  weekStart.tm_hour = 0; weekStart.tm_min = 0; weekStart.tm_sec = 0;
   mktime(&weekStart);
 
-  // Current time for indicator
-  time_t now;
-  time(&now);
-  struct tm today;
-  localtime_r(&now, &today);
+  time_t now; time(&now);
+  struct tm today; localtime_r(&now, &today);
 
-  int headerH = 80;
+  // Headers
   int hourW = 50;
   int cellW = (SCREEN_WIDTH - hourW) / 7;
-  int hourH = 40;
-  int startHour = 7;
-  int endHour = 21;
+  int headerY = HEADER_HEIGHT;
+  int headerH = 45; 
+  const char* weekDaysDe[] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 
-  // Day headers
-  const char* days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
   for (int d = 0; d < 7; d++) {
     struct tm day = weekStart;
     day.tm_mday += d;
@@ -428,299 +375,336 @@ void drawWeekView() {
                     day.tm_year == today.tm_year);
 
     int x = hourW + d * cellW;
-    uint16_t bg = isToday ? COLOR_TODAY : COLOR_HEADER;
-    tft.fillRect(x, 50, cellW, 30, bg);
-    tft.drawRect(x, 50, cellW, 30, COLOR_GRID);
+    tft.fillRect(x, headerY, cellW, headerH, isToday ? COLOR_TODAY : COLOR_BG);
+    tft.drawRect(x, headerY, cellW, headerH, COLOR_GRID);
 
-    tft.setTextColor(COLOR_TEXT);
+    tft.setTextColor(isToday ? 0xFFFF : COLOR_TEXT_DIM);
+    tft.setTextSize(1);
+    tft.setCursor(x + 10, headerY + 8);
+    tft.print(weekDaysDe[day.tm_wday]); 
     tft.setTextSize(2);
-    tft.setCursor(x + 10, 55);
-    tft.printf("%s %d", days[d], day.tm_mday);
+    tft.setCursor(x + 10, headerY + 20);
+    tft.print(day.tm_mday);
   }
 
-  // Hour labels and grid
-  int gridY = headerH;
+  // Grid
+  int gridY = headerY + headerH;
   for (int h = startHour; h <= endHour; h++) {
     int y = gridY + (h - startHour) * hourH;
-
-    // Hour label
     tft.setTextColor(COLOR_TEXT_DIM);
     tft.setTextSize(1);
     tft.setCursor(5, y + 2);
-    tft.printf("%2d:00", h);
-
-    // Grid lines
-    tft.drawLine(hourW, y, SCREEN_WIDTH, y, COLOR_GRID);
-
-    for (int d = 0; d < 7; d++) {
-      tft.drawLine(hourW + d * cellW, gridY, hourW + d * cellW, SCREEN_HEIGHT - 35, COLOR_GRID);
-    }
+    tft.printf("%d:00", h);
+    tft.drawLine(0, y, SCREEN_WIDTH, y, COLOR_GRID);
+  }
+  
+  for (int d = 0; d <= 7; d++) {
+     tft.drawLine(hourW + d * cellW, gridY, hourW + d * cellW, SCREEN_HEIGHT, COLOR_GRID);
   }
 
-  // Current time indicator
-  if (today.tm_hour >= startHour && today.tm_hour <= endHour) {
-    int todayCol = today.tm_wday;
-    struct tm ws = weekStart;
-    bool inThisWeek = (today.tm_mday >= ws.tm_mday &&
-                       today.tm_mday < ws.tm_mday + 7 &&
-                       today.tm_mon == ws.tm_mon);
-
-    if (inThisWeek) {
-      float hourPos = today.tm_hour + today.tm_min / 60.0 - startHour;
-      int y = gridY + (int)(hourPos * hourH);
-      int x = hourW + todayCol * cellW;
-      tft.drawLine(x, y, x + cellW, y, COLOR_NOW);
-      tft.fillCircle(x, y, 4, COLOR_NOW);
-    }
-  }
-
-  // Draw events
+  // Events - smart layout: side-by-side ONLY when overlapping
   for (int d = 0; d < 7; d++) {
     struct tm day = weekStart;
     day.tm_mday += d;
     time_t dayStart = mktime(&day);
-
     CalEvent* dayEvents[20];
     int numEvents = getEventsForDay(dayStart, dayEvents, 20);
 
-    int x = hourW + d * cellW;
+    int dayColX = hourW + d * cellW;
+    int colPadding = 2;
 
-    for (int e = 0; e < numEvents; e++) {
-      CalEvent* evt = dayEvents[e];
+    // Pre-calculate start/end hours for all events
+    float evtStartH[20], evtEndH[20];
+    for (int i = 0; i < numEvents; i++) {
+       struct tm st, et;
+       localtime_r(&dayEvents[i]->start, &st);
+       localtime_r(&dayEvents[i]->end, &et);
+       evtStartH[i] = st.tm_hour + st.tm_min / 60.0;
+       evtEndH[i] = et.tm_hour + et.tm_min / 60.0;
+    }
 
-      struct tm evtStart;
-      localtime_r(&evt->start, &evtStart);
+    for (int i = 0; i < numEvents; i++) {
+       float s = evtStartH[i];
+       float e = evtEndH[i];
+       
+       // Clamp to view
+       if (s < startHour) s = startHour;
+       if (e > endHour) e = endHour;
+       if (e <= s) continue;
 
-      if (evtStart.tm_hour < startHour) evtStart.tm_hour = startHour;
+       // Check for overlaps with OTHER events
+       int overlapCount = 0;
+       int myColumn = 0;
+       for (int j = 0; j < numEvents; j++) {
+          if (i == j) continue;
+          // Check time overlap
+          if (max(evtStartH[i], evtStartH[j]) < min(evtEndH[i], evtEndH[j])) {
+             overlapCount++;
+             // Determine column order by start time, then by index
+             if (evtStartH[j] < evtStartH[i] || 
+                 (evtStartH[j] == evtStartH[i] && j < i)) {
+                myColumn++;
+             }
+          }
+       }
 
-      float startPos = evtStart.tm_hour + evtStart.tm_min / 60.0 - startHour;
-      float duration = (evt->end - evt->start) / 3600.0;
-      if (startPos + duration > endHour - startHour) {
-        duration = endHour - startHour - startPos;
-      }
+       int evtX, evtWidth;
+       if (overlapCount == 0) {
+          // No overlaps - full width
+          evtX = dayColX + colPadding;
+          evtWidth = cellW - (colPadding * 2);
+       } else {
+          // Has overlaps - split into columns
+          int totalCols = overlapCount + 1;
+          int slotWidth = (cellW - (colPadding * 2)) / totalCols;
+          evtX = dayColX + colPadding + myColumn * slotWidth;
+          evtWidth = slotWidth - colPadding;
+          if (evtWidth < 10) evtWidth = 10;
+       }
 
-      int y = gridY + (int)(startPos * hourH);
-      int h = (int)(duration * hourH);
-      if (h < 20) h = 20;
-
-      tft.fillRoundRect(x + 2, y + 1, cellW - 4, h - 2, 3, evt->color);
-      tft.setTextColor(COLOR_TEXT);
-      tft.setTextSize(1);
-      tft.setCursor(x + 5, y + 4);
-
-      String title = evt->title;
-      if (title.length() > 15) title = title.substring(0, 14) + "..";
-      tft.print(title);
+       int top = gridY + (int)((s - startHour) * hourH);
+       int height = (int)((e - s) * hourH);
+       
+       tft.fillRoundRect(evtX, top + 1, evtWidth, height - 2, 4, dayEvents[i]->color);
+       
+       if (evtWidth > 20 && height > 12) {
+           tft.setTextColor(0xFFFF);
+           tft.setTextSize(1);
+           tft.setCursor(evtX + 3, top + 3);
+           int maxChars = evtWidth / 7;
+           if (maxChars > 10) maxChars = 10;
+           tft.print(dayEvents[i]->title.substring(0, maxChars));
+       }
     }
   }
-
-  drawLegend();
+  
+  drawLegend(); 
 }
 
-// Draw day view
+void sortEvents(CalEvent** events, int count) {
+  for (int i = 1; i < count; i++) {
+    CalEvent* key = events[i];
+    int j = i - 1;
+    while (j >= 0 && events[j]->start > key->start) {
+      events[j + 1] = events[j];
+      j--;
+    }
+    events[j + 1] = key;
+  }
+}
+
 void drawDayView() {
   tft.fillScreen(COLOR_BG);
   drawHeader();
 
-  time_t now;
-  time(&now);
-  struct tm today;
-  localtime_r(&now, &today);
-
+  time_t now; time(&now);
+  struct tm today; localtime_r(&now, &today);
   bool isToday = (viewDate.tm_mday == today.tm_mday &&
                   viewDate.tm_mon == today.tm_mon &&
                   viewDate.tm_year == today.tm_year);
 
-  int hourW = 60;
-  int hourH = 50;
-  int startHour = 6;
-  int endHour = 22;
-  int gridY = 55;
+  int startHour = 7;
+  int endHour = 18; 
+  int hourH = HOUR_HEIGHT_DAY;
 
-  // Date subtitle
-  char dateStr[32];
-  strftime(dateStr, sizeof(dateStr), "%A, %B %d", &viewDate);
-  tft.setTextColor(isToday ? 0xFFE0 : COLOR_TEXT);
+  int headerY = HEADER_HEIGHT;
+  // Sub-header for date
+  int gridY = headerY + 40; 
+
+  char dateStr[64];
+  snprintf(dateStr, sizeof(dateStr), "%s, %d. %s %d", dayNamesLong[viewDate.tm_wday], viewDate.tm_mday, monthNames[viewDate.tm_mon], viewDate.tm_year + 1900);
+  
+  tft.setTextColor(isToday ? 0xFFFF : COLOR_TEXT);
   tft.setTextSize(2);
-  tft.setCursor(80, 55);
+  tft.setCursor(80, headerY + 10);
   tft.print(dateStr);
-  if (isToday) tft.print(" (Today)");
+  
+  if (isToday) {
+     tft.print(" HEUTE");
+  }
 
-  gridY = 85;
-
-  // Hour grid
+  int hourW = 60;
   for (int h = startHour; h <= endHour; h++) {
-    int y = gridY + (h - startHour) * hourH;
-
-    // Hour label
-    tft.setTextColor(COLOR_TEXT_DIM);
-    tft.setTextSize(2);
-    tft.setCursor(5, y + 2);
-    tft.printf("%2d:00", h);
-
-    // Grid line
-    tft.drawLine(hourW, y, SCREEN_WIDTH - 20, y, COLOR_GRID);
+     int y = gridY + (h - startHour) * hourH;
+     tft.setTextColor(COLOR_TEXT_DIM);
+     tft.setTextSize(2);
+     tft.setCursor(5, y - 6);
+     tft.printf("%2d:00", h);
+     tft.drawLine(hourW, y, SCREEN_WIDTH, y, COLOR_GRID); 
   }
 
-  // Current time indicator
-  if (isToday && today.tm_hour >= startHour && today.tm_hour <= endHour) {
-    float hourPos = today.tm_hour + today.tm_min / 60.0 - startHour;
-    int y = gridY + (int)(hourPos * hourH);
-    tft.drawLine(hourW, y, SCREEN_WIDTH - 20, y, COLOR_NOW);
-    tft.fillCircle(hourW, y, 5, COLOR_NOW);
-
-    char timeStr[8];
-    sprintf(timeStr, "%02d:%02d", today.tm_hour, today.tm_min);
-    tft.setTextColor(COLOR_NOW);
-    tft.setTextSize(1);
-    tft.setCursor(hourW + 10, y - 10);
-    tft.print(timeStr);
-  }
-
-  // Get events for this day
   struct tm dayTm = viewDate;
-  dayTm.tm_hour = 0;
-  dayTm.tm_min = 0;
-  dayTm.tm_sec = 0;
+  dayTm.tm_hour = 0; dayTm.tm_min = 0; dayTm.tm_sec = 0;
   time_t dayStart = mktime(&dayTm);
-
   CalEvent* dayEvents[30];
   int numEvents = getEventsForDay(dayStart, dayEvents, 30);
-
-  // Draw events
-  int eventW = SCREEN_WIDTH - hourW - 40;
-  for (int e = 0; e < numEvents; e++) {
-    CalEvent* evt = dayEvents[e];
-
-    struct tm evtStart;
-    localtime_r(&evt->start, &evtStart);
-
-    if (evtStart.tm_hour < startHour) evtStart.tm_hour = startHour;
-
-    float startPos = evtStart.tm_hour + evtStart.tm_min / 60.0 - startHour;
-    float duration = (evt->end - evt->start) / 3600.0;
-    if (startPos + duration > endHour - startHour) {
-      duration = endHour - startHour - startPos;
-    }
-
-    int y = gridY + (int)(startPos * hourH);
-    int h = (int)(duration * hourH);
-    if (h < 30) h = 30;
-
-    tft.fillRoundRect(hourW + 10, y + 2, eventW, h - 4, 5, evt->color);
-    tft.setTextColor(COLOR_TEXT);
-    tft.setTextSize(2);
-    tft.setCursor(hourW + 20, y + 8);
-    tft.print(evt->title);
-
-    // Time
-    char timeStr[16];
-    struct tm es, ee;
-    localtime_r(&evt->start, &es);
-    localtime_r(&evt->end, &ee);
-    sprintf(timeStr, "%d:%02d - %d:%02d", es.tm_hour, es.tm_min, ee.tm_hour, ee.tm_min);
-    tft.setTextSize(1);
-    tft.setCursor(hourW + 20, y + 30);
-    tft.print(timeStr);
+  
+  sortEvents(dayEvents, numEvents);
+  
+  struct LayoutInfo {
+     int col;
+     float startH;
+     float endH;
+  };
+  LayoutInfo layouts[30];
+  
+  float colEndTimes[10]; 
+  for(int k=0; k<10; k++) colEndTimes[k] = -1.0;
+  
+  for (int i = 0; i < numEvents; i++) {
+     struct tm st, et;
+     localtime_r(&dayEvents[i]->start, &st);
+     localtime_r(&dayEvents[i]->end, &et);
+     float startH = st.tm_hour + st.tm_min / 60.0;
+     float endH = et.tm_hour + et.tm_min / 60.0;
+     layouts[i].startH = startH;
+     layouts[i].endH = endH;
+     
+     int placedCol = 0;
+     for (int c = 0; c < 10; c++) {
+        if (startH >= colEndTimes[c]) {
+           placedCol = c;
+           colEndTimes[c] = endH;
+           break;
+        }
+     }
+     layouts[i].col = placedCol;
   }
-
+  
+  int totalW = SCREEN_WIDTH - hourW - 20; 
+  
+  for (int i = 0; i < numEvents; i++) {
+     int maxColInGroup = 0;
+     for (int j = 0; j < numEvents; j++) {
+        if (i == j) continue;
+        if (max(layouts[i].startH, layouts[j].startH) < min(layouts[i].endH, layouts[j].endH)) {
+            if (layouts[j].col > maxColInGroup) maxColInGroup = layouts[j].col;
+        }
+     }
+     if (layouts[i].col > maxColInGroup) maxColInGroup = layouts[i].col;
+     
+     int colCount = maxColInGroup + 1;
+     int width = totalW / colCount;
+     int left = hourW + 10 + layouts[i].col * width;
+     
+     float s = layouts[i].startH;
+     float e = layouts[i].endH;
+     if (s < startHour) s = startHour;
+     if (e > endHour) e = endHour;
+     if (e <= s) continue;
+     
+     int top = gridY + (int)((s - startHour) * hourH);
+     int h = (int)((e - s) * hourH);
+     
+     tft.fillRoundRect(left, top, width - 4, h - 2, 6, dayEvents[i]->color);
+     
+     tft.setTextColor(0xFFFF);
+     tft.setTextSize(2);
+     tft.setCursor(left + 5, top + 5);
+     if (width < 80) tft.setTextSize(1);
+     
+     String title = dayEvents[i]->title;
+     int maxChars = width / 12; 
+     if (title.length() > maxChars) title = title.substring(0, maxChars) + ".";
+     tft.print(title);
+     
+     tft.setCursor(left + 5, top + 25);
+     tft.setTextSize(1);
+     struct tm st; localtime_r(&dayEvents[i]->start, &st);
+     struct tm et; localtime_r(&dayEvents[i]->end, &et);
+     tft.printf("%02d:%02d-%02d:%02d", st.tm_hour, st.tm_min, et.tm_hour, et.tm_min);
+  }
+  
   drawLegend();
 }
 
-// Handle touch input
 void handleTouch() {
   uint16_t x, y;
-  if (tft.getTouch(&x, &y)) {
-    if (!touched && millis() - lastTouch > 200) {
+  bool isTouching = tft.getTouch(&x, &y);
+
+  if (isTouching) {
+    if (!touched) {
       touched = true;
+      touchStartX = x;
+      touchStartY = y;
       lastTouch = millis();
-      touchX = x;
-      touchY = y;
-
-      // Check header buttons
-      if (y < 50) {
-        // Left arrow
-        if (x < 60) {
-          if (currentView == VIEW_MONTH) {
-            viewDate.tm_mon--;
-          } else if (currentView == VIEW_WEEK) {
-            viewDate.tm_mday -= 7;
-          } else {
-            viewDate.tm_mday--;
-          }
-          mktime(&viewDate);
-          return;
+    }
+    touchX = x;
+    touchY = y;
+  } else {
+    if (touched) {
+      touched = false;
+      int dx = touchX - touchStartX;
+      int dy = touchY - touchStartY;
+      
+      if (abs(dx) > 50 && abs(dy) < 60) {
+        if (dx > 0) {
+          if (currentView == VIEW_MONTH) viewDate.tm_mon--;
+          else if (currentView == VIEW_WEEK) viewDate.tm_mday -= 7;
+          else viewDate.tm_mday--;
+        } else {
+          if (currentView == VIEW_MONTH) viewDate.tm_mon++;
+          else if (currentView == VIEW_WEEK) viewDate.tm_mday += 7;
+          else viewDate.tm_mday++;
         }
+        mktime(&viewDate);
+        draw(); 
+        return;
+      }
 
-        // Right arrow
-        if (x > SCREEN_WIDTH - 60) {
-          if (currentView == VIEW_MONTH) {
-            viewDate.tm_mon++;
-          } else if (currentView == VIEW_WEEK) {
-            viewDate.tm_mday += 7;
-          } else {
-            viewDate.tm_mday++;
-          }
-          mktime(&viewDate);
-          return;
-        }
-
-        // View mode buttons
-        int btnX = SCREEN_WIDTH - 250;
-        int btnW = 70;
-        if (x >= btnX && x < btnX + btnW) {
-          currentView = VIEW_DAY;
-        } else if (x >= btnX + btnW + 5 && x < btnX + 2 * btnW + 5) {
-          currentView = VIEW_WEEK;
-        } else if (x >= btnX + 2 * (btnW + 5) && x < btnX + 3 * btnW + 10) {
-          currentView = VIEW_MONTH;
-        }
+      if (millis() - lastTouch < 500 && abs(dx) < 10 && abs(dy) < 10) {
+         if (touchStartY < 50) {
+            if (touchStartX < 80) { 
+               if (currentView == VIEW_MONTH) viewDate.tm_mon--;
+               else if (currentView == VIEW_WEEK) viewDate.tm_mday -= 7;
+               else viewDate.tm_mday--;
+               mktime(&viewDate);
+               draw();
+               return;
+            }
+            if (touchStartX > SCREEN_WIDTH - 80) { 
+               if (currentView == VIEW_MONTH) viewDate.tm_mon++;
+               else if (currentView == VIEW_WEEK) viewDate.tm_mday += 7;
+               else viewDate.tm_mday++;
+               mktime(&viewDate);
+               draw();
+               return;
+            }
+            int btnX = SCREEN_WIDTH - 250;
+            if (touchStartX >= btnX && touchStartX < btnX + 70) currentView = VIEW_DAY;
+            else if (touchStartX >= btnX + 75 && touchStartX < btnX + 145) currentView = VIEW_WEEK;
+            else if (touchStartX >= btnX + 150 && touchStartX < btnX + 220) currentView = VIEW_MONTH;
+            draw();
+         }
       }
     }
-  } else {
-    touched = false;
   }
 }
 
-// Draw current view
 void draw() {
   switch (currentView) {
-    case VIEW_DAY:
-      drawDayView();
-      break;
-    case VIEW_WEEK:
-      drawWeekView();
-      break;
-    case VIEW_MONTH:
-      drawMonthView();
-      break;
+    case VIEW_DAY:   drawDayView(); break;
+    case VIEW_WEEK:  drawWeekView(); break;
+    case VIEW_MONTH: drawMonthView(); break;
   }
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // Initialize display
   tft.init();
   tft.setRotation(0);
   tft.fillScreen(COLOR_BG);
   tft.setTextColor(COLOR_TEXT);
 
-  // Enable backlight if needed
-  // pinMode(BACKLIGHT_PIN, OUTPUT);
-  // digitalWrite(BACKLIGHT_PIN, HIGH);
-
-  // Connect WiFi
   if (!connectWiFi()) {
     tft.println("WiFi failed. Restarting...");
     delay(3000);
     ESP.restart();
   }
 
-  // Sync time
   syncTime();
 
-  // Initial fetch
   tft.fillScreen(COLOR_BG);
   tft.setCursor(20, SCREEN_HEIGHT / 2);
   tft.setTextSize(2);
@@ -733,21 +717,17 @@ void setup() {
   }
   delay(500);
 
-  // Initial draw
   draw();
 }
 
 void loop() {
-  // Handle touch
   handleTouch();
 
-  // Periodic refresh
   if (millis() - lastRefresh > REFRESH_INTERVAL) {
     fetchEvents();
     draw();
   }
 
-  // Redraw on view change or navigation
   static ViewMode lastView = currentView;
   static struct tm lastDate = viewDate;
 
@@ -760,7 +740,6 @@ void loop() {
     lastDate = viewDate;
   }
 
-  // Update time indicator every minute
   static unsigned long lastTimeUpdate = 0;
   if (millis() - lastTimeUpdate > 60000) {
     lastTimeUpdate = millis();
@@ -768,6 +747,5 @@ void loop() {
       draw();
     }
   }
-
   delay(50);
 }
