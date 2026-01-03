@@ -46,7 +46,7 @@ async function fetchICS(config: CalendarConfig): Promise<CalendarEvent[]> {
   try {
     const response = await fetch(config.url, {
       next: { revalidate: 300 }, // Cache for 5 minutes
-    });
+    } as any);
 
     if (!response.ok) {
       console.error(`Failed to fetch ${config.name}: ${response.status}`);
@@ -132,6 +132,17 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const from = searchParams.get('from');
   const to = searchParams.get('to');
+
+  // Security check
+  const apiSecret = process.env.API_SECRET;
+  const apiKey = request.headers.get('x-api-key');
+
+  if (apiSecret && apiKey !== apiSecret) {
+    return NextResponse.json(
+      { error: 'Unauthorized' },
+      { status: 401 }
+    );
+  }
 
   try {
     // Fetch all calendars in parallel

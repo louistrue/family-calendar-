@@ -180,6 +180,7 @@ bool fetchEvents() {
            to.tm_year + 1900, to.tm_mon + 1, to.tm_mday);
 
   http.begin(url);
+  http.addHeader("x-api-key", API_SECRET);
   http.setTimeout(15000);
 
   int httpCode = http.GET();

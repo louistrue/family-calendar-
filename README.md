@@ -67,7 +67,9 @@ npx vercel
 # CAL_1_URL, CAL_1_NAME, CAL_1_COLOR
 # CAL_2_URL, CAL_2_NAME, CAL_2_COLOR
 # CAL_3_URL, CAL_3_NAME, CAL_3_COLOR
+# CAL_3_URL, CAL_3_NAME, CAL_3_COLOR
 # CAL_4_URL, CAL_4_NAME, CAL_4_COLOR
+# API_SECRET (e.g., "my-secret-key")
 ```
 
 ### 3. Configure ESP32
@@ -84,6 +86,7 @@ Edit `secrets.h`:
 #define WIFI_SSID     "YourWiFi"
 #define WIFI_PASSWORD "YourPassword"
 #define API_URL       "https://your-app.vercel.app/api/calendar"
+#define API_SECRET    "my-secret-key"
 #define GMT_OFFSET    -8  // Your timezone offset from GMT
 ```
 
