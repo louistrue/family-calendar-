@@ -1,8 +1,13 @@
 # Family Calendar Display
 
-A beautiful family calendar display for Makerfabs ESP32-S3 7" touchscreen (1024x600).
+A beautiful family calendar display for **ESP32 touchscreen** or **Raspberry Pi with touchscreen**.
 
 Aggregates multiple calendars (Google, Outlook, iCloud) and displays them color-coded with day/week/month views.
+
+## 🎯 Two Deployment Options
+
+1. **ESP32 Hardware Display** - Standalone device with Makerfabs ESP32-S3 7" touchscreen
+2. **Raspberry Pi + Touchscreen** - Full Linux system with VNC remote access
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -31,20 +36,57 @@ Aggregates multiple calendars (Google, Outlook, iCloud) and displays them color-
 
 ```
 family-calendar/
-├── api/                          # Vercel backend
-│   ├── app/api/calendar/route.ts # ICS aggregation API
+├── api/                            # Next.js backend & frontend
+│   ├── app/
+│   │   ├── api/calendar/route.ts  # ICS aggregation API
+│   │   ├── simulator/page.tsx     # Browser-based simulator
+│   │   └── display/page.tsx       # Kiosk mode display (for Raspberry Pi)
 │   ├── package.json
-│   └── .env.example              # Calendar URL template
-├── esp32/                        # Display firmware
+│   └── .env.example                # Calendar URL template
+├── esp32/                          # Display firmware (for ESP32 hardware)
 │   ├── src/
-│   │   ├── main.cpp              # Main firmware
-│   │   ├── lgfx_config.h         # Display pin configuration
-│   │   └── secrets.h.example     # WiFi + API config template
+│   │   ├── main.cpp                # Main firmware
+│   │   ├── lgfx_config.h           # Display pin configuration
+│   │   └── secrets.h.example       # WiFi + API config template
 │   └── platformio.ini
+├── raspberry-pi/                   # Raspberry Pi deployment
+│   ├── install.sh                  # Automated installation script
+│   ├── start-kiosk.sh              # Kiosk mode startup
+│   ├── family-calendar.service     # Systemd service
+│   ├── README.md                   # Full setup guide
+│   └── QUICK-START.md              # Quick reference
 └── README.md
 ```
 
 ## Quick Start
+
+### Choose Your Hardware
+
+#### Option A: Raspberry Pi with Touchscreen
+Perfect for a permanent wall-mounted display with remote access.
+
+See **[raspberry-pi/README.md](raspberry-pi/README.md)** for complete setup guide.
+
+**Quick install:**
+```bash
+cd raspberry-pi
+./install.sh
+```
+
+**Features:**
+- Auto-start on boot
+- Kiosk mode display
+- VNC remote access from tablet
+- Touch gestures (swipe to navigate)
+- Auto-refresh every 15 minutes
+- Production-ready with systemd
+
+#### Option B: ESP32 Hardware Display
+Standalone embedded device, no operating system needed.
+
+Follow the ESP32 setup below.
+
+---
 
 ### 1. Get Calendar ICS URLs
 
@@ -54,8 +96,19 @@ family-calendar/
 | **Outlook** | Settings → Calendar → Shared calendars → Publish → ICS link |
 | **Apple iCloud** | Calendar app → Share → Public Calendar → Copy link |
 
-### 2. Deploy API to Vercel
+### 2. Deploy API
 
+**For Raspberry Pi (Local):**
+```bash
+cd api
+npm install
+npm run build
+npm start  # Runs on http://localhost:3000
+```
+
+Configure `.env` file with your calendars (see `.env.example`).
+
+**For ESP32 (Cloud - Vercel):**
 ```bash
 cd api
 npm install
@@ -66,7 +119,6 @@ npx vercel
 # Add environment variables in Vercel dashboard:
 # CAL_1_URL, CAL_1_NAME, CAL_1_COLOR
 # CAL_2_URL, CAL_2_NAME, CAL_2_COLOR
-# CAL_3_URL, CAL_3_NAME, CAL_3_COLOR
 # CAL_3_URL, CAL_3_NAME, CAL_3_COLOR
 # CAL_4_URL, CAL_4_NAME, CAL_4_COLOR
 # API_SECRET (e.g., "my-secret-key")
@@ -102,12 +154,21 @@ pio run -t upload
 pio device monitor
 ```
 
-## Hardware
+## Hardware Options
 
+### Raspberry Pi Setup
+- **Raspberry Pi 4** (recommended) or Pi 3
+- **Official Raspberry Pi Touchscreen** (1024x600) or compatible
+- **MicroSD card** (16GB+)
+- **Power supply**
+
+See **[raspberry-pi/README.md](raspberry-pi/README.md)** for complete hardware and software setup.
+
+### ESP32 Hardware Display
 - **Display**: Makerfabs MaTouch ESP32-S3 7" IPS (1024x600)
 - [Product page](https://www.makerfabs.com/esp32-s3-parallel-tft-with-touch-7-inch.html)
 
-### Pin Configuration
+#### Pin Configuration
 
 The `lgfx_config.h` is configured for the standard Makerfabs 7" board. If you have a different revision, check the [Makerfabs wiki](https://wiki.makerfabs.com/) and adjust pins accordingly.
 
