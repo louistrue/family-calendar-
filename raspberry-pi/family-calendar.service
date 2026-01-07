@@ -1,0 +1,21 @@
+[Unit]
+Description=Family Calendar Next.js Application
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/family-calendar/api
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=family-calendar
+
+[Install]
+WantedBy=multi-user.target

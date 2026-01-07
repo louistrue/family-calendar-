@@ -64,6 +64,8 @@ async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date
 
     for (const vevent of vevents) {
       const uid = vevent.getFirstPropertyValue('uid');
+      if (!uid || typeof uid !== 'string') continue; // Skip events without valid UID
+
       if (!eventsByUid.has(uid)) {
         eventsByUid.set(uid, []);
       }
@@ -116,7 +118,9 @@ async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date
           const exceptionDates = new Set<number>();
           for (const ex of exceptions) {
             const rid = ex.getFirstPropertyValue('recurrence-id');
-            if (rid) exceptionDates.add(rid.toJSDate().getTime());
+            if (rid && typeof rid === 'object' && 'toJSDate' in rid) {
+              exceptionDates.add(rid.toJSDate().getTime());
+            }
           }
 
           while ((next = iterator.next()) && count < maxOccurrences) {
