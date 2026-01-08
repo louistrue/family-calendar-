@@ -2,20 +2,47 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
-// Constants matching ESP32
-const SCREEN_WIDTH = 1024;
-const SCREEN_HEIGHT = 600;
-const HEADER_HEIGHT = 50;
-const HOUR_HEIGHT = 48;
+// Responsive - use viewport dimensions instead of fixed values
+const HEADER_HEIGHT = 60;
+const HOUR_HEIGHT = 56;
 
-// Premium Dark Theme Colors
-const COLOR_BG = '#0a0a12';
-const COLOR_HEADER = 'rgba(20, 20, 30, 0.8)';
-const COLOR_TODAY_BG = 'rgba(255, 255, 255, 0.08)';
-const COLOR_TEXT = '#FFFFFF';
-const COLOR_TEXT_DIM = '#9CA3AF';
-const COLOR_GRID = '#2A2A35';
-const COLOR_ACCENT = '#6366f1';
+// Theme definitions
+const themes = {
+    dark: {
+        bg: '#0a0a12',
+        header: 'rgba(20, 20, 30, 0.92)',
+        todayBg: 'rgba(255, 255, 255, 0.08)',
+        text: '#FFFFFF',
+        textDim: '#9CA3AF',
+        grid: '#2A2A35',
+        accent: '#818cf8',
+        cardBg: '#161622',
+        legendBg: 'rgba(20, 20, 30, 0.95)',
+        modalOverlay: 'rgba(0, 0, 0, 0.7)',
+        buttonBg: 'rgba(255, 255, 255, 0.1)',
+        buttonActiveBg: 'rgba(255, 255, 255, 0.15)',
+        pillBg: 'rgba(0, 0, 0, 0.4)',
+        codeBg: 'rgba(255, 255, 255, 0.1)',
+    },
+    light: {
+        bg: '#f8fafc',
+        header: 'rgba(255, 255, 255, 0.92)',
+        todayBg: '#e0e7ff',
+        text: '#1e293b',
+        textDim: '#64748b',
+        grid: '#e2e8f0',
+        accent: '#6366f1',
+        cardBg: '#ffffff',
+        legendBg: 'rgba(255, 255, 255, 0.95)',
+        modalOverlay: 'rgba(0, 0, 0, 0.4)',
+        buttonBg: 'rgba(0, 0, 0, 0.06)',
+        buttonActiveBg: 'rgba(0, 0, 0, 0.1)',
+        pillBg: 'rgba(0, 0, 0, 0.06)',
+        codeBg: 'rgba(0, 0, 0, 0.06)',
+    },
+};
+
+type Theme = typeof themes.dark;
 
 interface CalendarEvent {
     id: string;
@@ -60,9 +87,13 @@ export default function Display() {
     const [view, setView] = useState<'DAY' | 'WEEK' | 'MONTH'>('WEEK');
     const [date, setDate] = useState(new Date());
     const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+    
+    // Theme state - defaults to light for family-friendly look
+    const [darkMode, setDarkMode] = useState(false);
+    const theme = darkMode ? themes.dark : themes.light;
 
     // Touch gesture state
-    const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
+    const [touchStart, setTouchStart] = useState<{ x: number, y: number, time: number } | null>(null);
 
     // Auto-refresh interval (in minutes)
     const [refreshInterval, setRefreshInterval] = useState(15);
@@ -73,6 +104,7 @@ export default function Display() {
         const keyFromUrl = params.get('apiKey') || params.get('key');
         const viewFromUrl = params.get('view') as 'DAY' | 'WEEK' | 'MONTH' | null;
         const refreshFromUrl = params.get('refresh');
+        const themeFromUrl = params.get('theme');
 
         if (keyFromUrl) {
             setApiKey(keyFromUrl);
@@ -88,6 +120,25 @@ export default function Display() {
                 setRefreshInterval(interval);
             }
         }
+
+        // Check URL param, then localStorage, then default to light
+        if (themeFromUrl === 'dark') {
+            setDarkMode(true);
+        } else if (themeFromUrl === 'light') {
+            setDarkMode(false);
+        } else {
+            const saved = localStorage.getItem('familyCalendarTheme');
+            if (saved === 'dark') setDarkMode(true);
+        }
+    }, []);
+
+    // Save theme preference
+    const toggleTheme = useCallback(() => {
+        setDarkMode(prev => {
+            const newMode = !prev;
+            localStorage.setItem('familyCalendarTheme', newMode ? 'dark' : 'light');
+            return newMode;
+        });
     }, []);
 
     const fetchEvents = useCallback(async () => {
@@ -168,7 +219,7 @@ export default function Display() {
     const handleTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
         const x = 'touches' in e ? e.touches[0].clientX : e.clientX;
         const y = 'touches' in e ? e.touches[0].clientY : e.clientY;
-        setTouchStart({ x, y });
+        setTouchStart({ x, y, time: Date.now() });
     };
 
     const handleTouchEnd = (e: React.TouchEvent | React.MouseEvent) => {
@@ -178,8 +229,10 @@ export default function Display() {
 
         const dx = x - touchStart.x;
         const dy = y - touchStart.y;
+        const dt = Date.now() - touchStart.time;
 
-        if (Math.abs(dx) > 100 && Math.abs(dy) < 60) {
+        // Swipe detection: horizontal movement > 80px, vertical < 60px, time < 500ms
+        if (Math.abs(dx) > 80 && Math.abs(dy) < 60 && dt < 500) {
             if (dx > 0) navigate(-1);
             else navigate(1);
         }
@@ -195,27 +248,28 @@ export default function Display() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                background: COLOR_BG,
-                color: COLOR_TEXT,
-                fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                background: theme.bg,
+                color: theme.text,
+                fontFamily: '"Nunito", "Quicksand", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
             }}>
                 <div style={{ textAlign: 'center', maxWidth: '600px', padding: '40px' }}>
-                    <h1 style={{ fontSize: '32px', marginBottom: '20px' }}>Familienkalender</h1>
-                    <p style={{ color: COLOR_TEXT_DIM, marginBottom: '20px' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>📅</div>
+                    <h1 style={{ fontSize: '32px', marginBottom: '20px', fontWeight: 700 }}>Familienkalender</h1>
+                    <p style={{ color: theme.textDim, marginBottom: '20px' }}>
                         Bitte öffnen Sie diese Seite mit einem API-Schlüssel:
                     </p>
                     <code style={{
                         display: 'block',
-                        background: 'rgba(255,255,255,0.1)',
+                        background: theme.codeBg,
                         padding: '15px',
-                        borderRadius: '8px',
+                        borderRadius: '12px',
                         fontSize: '14px',
                         wordBreak: 'break-all'
                     }}>
                         /display?apiKey=IHR_API_SCHLÜSSEL
                     </code>
-                    <p style={{ color: COLOR_TEXT_DIM, marginTop: '20px', fontSize: '14px' }}>
-                        Optionale Parameter: &view=WEEK|DAY|MONTH &refresh=15 (Minuten)
+                    <p style={{ color: theme.textDim, marginTop: '20px', fontSize: '14px' }}>
+                        Optionale Parameter: &view=WEEK|DAY|MONTH &refresh=15 &theme=light|dark
                     </p>
                 </div>
             </div>
@@ -226,306 +280,377 @@ export default function Display() {
         <div style={{
             width: '100vw',
             height: '100vh',
-            background: '#000',
+            background: theme.bg,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            overflow: 'hidden'
+            flexDirection: 'column',
+            overflow: 'hidden',
+            fontFamily: '"Nunito", "Quicksand", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            userSelect: 'none',
+            touchAction: 'pan-y',
+            WebkitTapHighlightColor: 'transparent',
+            transition: 'background 0.3s ease',
         }}>
+            {/* Google Fonts */}
+            <style>{`
+                @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Quicksand:wght@400;500;600;700&display=swap');
+            `}</style>
+            
+            {/* Glass Header */}
             <div
                 style={{
-                    width: SCREEN_WIDTH,
-                    height: SCREEN_HEIGHT,
-                    background: COLOR_BG,
-                    position: 'relative',
-                    overflow: 'hidden',
-                    fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                    userSelect: 'none'
+                    height: HEADER_HEIGHT,
+                    minHeight: HEADER_HEIGHT,
+                    background: theme.header,
+                    backdropFilter: 'blur(10px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '0 12px',
+                    color: theme.text,
+                    justifyContent: 'space-between',
+                    borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,
+                    zIndex: 20,
+                    flexShrink: 0,
+                    boxShadow: darkMode ? 'none' : '0 2px 8px rgba(0,0,0,0.04)',
+                    transition: 'all 0.3s ease',
+                }}
+            >
+                {/* Left Area & Prev Button */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); navigate(-1); }}
+                        aria-label="Vorherige Periode"
+                        style={{
+                            background: theme.buttonBg,
+                            border: 'none',
+                            color: theme.text,
+                            fontSize: '20px',
+                            cursor: 'pointer',
+                            width: 48,
+                            height: 48,
+                            borderRadius: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            touchAction: 'manipulation',
+                            transition: 'all 0.2s',
+                        }}>
+                        ◀
+                    </button>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); jumpToToday(); }} 
+                        style={{ 
+                            background: theme.buttonActiveBg, 
+                            border: 'none', 
+                            color: theme.text, 
+                            padding: '10px 20px', 
+                            borderRadius: '24px', 
+                            cursor: 'pointer', 
+                            fontSize: '15px', 
+                            fontWeight: 600,
+                            minHeight: 44,
+                            touchAction: 'manipulation',
+                            transition: 'all 0.2s',
+                        }}
+                    >
+                        Heute
+                    </button>
+                </div>
+
+                <div style={{ fontSize: '18px', fontWeight: 600, letterSpacing: '0.3px', textAlign: 'center', flex: 1, padding: '0 10px' }}>
+                    {view === 'MONTH'
+                        ? monthFormatter.format(date)
+                        : view === 'DAY'
+                            ? dateFormatter.format(date)
+                            : `Woche vom ${new Date(new Date(date).setDate(date.getDate() - (date.getDay() === 0 ? 6 : date.getDay() - 1))).toLocaleDateString('de-DE')}`
+                    }
+                </div>
+
+                {/* Right Area & Next Button */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {/* Theme Toggle */}
+                    <button
+                        onClick={(e) => { e.stopPropagation(); toggleTheme(); }}
+                        aria-label={darkMode ? 'Heller Modus' : 'Dunkler Modus'}
+                        title={darkMode ? 'Heller Modus' : 'Dunkler Modus'}
+                        style={{
+                            background: theme.buttonBg,
+                            border: 'none',
+                            color: theme.text,
+                            fontSize: '22px',
+                            cursor: 'pointer',
+                            width: 44,
+                            height: 44,
+                            borderRadius: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            touchAction: 'manipulation',
+                            transition: 'all 0.2s',
+                        }}>
+                        {darkMode ? '☀️' : '🌙'}
+                    </button>
+                    
+                    <div style={{ display: 'flex', gap: '4px', background: theme.pillBg, padding: '4px', borderRadius: '12px' }}>
+                        {([['Tag', 'DAY'], ['Woche', 'WEEK'], ['Monat', 'MONTH']] as const).map(([label, v]) => (
+                            <button
+                                key={v}
+                                onClick={(e) => { e.stopPropagation(); setView(v); }}
+                                style={{
+                                    background: view === v ? theme.accent : 'transparent',
+                                    color: view === v ? '#fff' : theme.text,
+                                    border: 'none',
+                                    padding: '10px 14px',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    fontWeight: 600,
+                                    minHeight: 44,
+                                    touchAction: 'manipulation',
+                                }}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); navigate(1); }}
+                        aria-label="Nächste Periode"
+                        style={{
+                            background: theme.buttonBg,
+                            border: 'none',
+                            color: theme.text,
+                            fontSize: '20px',
+                            cursor: 'pointer',
+                            width: 48,
+                            height: 48,
+                            borderRadius: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            touchAction: 'manipulation',
+                            transition: 'all 0.2s',
+                        }}>
+                        ▶
+                    </button>
+                </div>
+            </div>
+
+            {/* Views - Full height minus header */}
+            <div 
+                style={{ 
+                    flex: 1, 
+                    overflow: 'hidden', 
+                    position: 'relative' 
                 }}
                 onTouchStart={handleTouchStart}
                 onTouchEnd={handleTouchEnd}
                 onMouseDown={handleTouchStart}
                 onMouseUp={handleTouchEnd}
             >
-                {/* Glass Header */}
+                {view === 'MONTH' && <MonthView date={date} events={events} onEventClick={setSelectedEvent} theme={theme} />}
+                {view === 'WEEK' && <WeekView date={date} events={events} onEventClick={setSelectedEvent} theme={theme} />}
+                {view === 'DAY' && <DayView date={date} events={events} onEventClick={setSelectedEvent} theme={theme} />}
+            </div>
+
+            {/* Floating Legend */}
+            <div style={{
+                position: 'fixed',
+                bottom: 16,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                gap: '16px',
+                background: theme.legendBg,
+                padding: '10px 20px',
+                borderRadius: '30px',
+                border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,
+                backdropFilter: 'blur(8px)',
+                boxShadow: darkMode ? 'none' : '0 4px 12px rgba(0,0,0,0.08)',
+                zIndex: 50,
+                transition: 'all 0.3s ease',
+            }}>
+                {calendars.map(cal => (
+                    <div key={cal.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: theme.textDim, fontSize: '13px', fontWeight: 500 }}>
+                        <div style={{ width: 10, height: 10, borderRadius: '50%', background: cal.color, boxShadow: `0 0 8px ${cal.color}` }}></div>
+                        {cal.name}
+                    </div>
+                ))}
+            </div>
+
+            {/* Error indicator */}
+            {error && (
+                <div style={{
+                    position: 'fixed',
+                    top: HEADER_HEIGHT + 12,
+                    right: 12,
+                    background: darkMode ? 'rgba(220, 38, 38, 0.95)' : '#fef2f2',
+                    color: darkMode ? '#fff' : '#dc2626',
+                    padding: '10px 18px',
+                    borderRadius: '10px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    border: darkMode ? 'none' : '1px solid #fecaca',
+                    zIndex: 60
+                }}>
+                    ⚠️ {error}
+                </div>
+            )}
+
+            {/* Loading indicator */}
+            {loading && (
+                <div style={{
+                    position: 'fixed',
+                    top: HEADER_HEIGHT + 12,
+                    right: 12,
+                    background: darkMode ? 'rgba(99, 102, 241, 0.95)' : '#eef2ff',
+                    color: darkMode ? '#fff' : '#6366f1',
+                    padding: '10px 18px',
+                    borderRadius: '10px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    border: darkMode ? 'none' : '1px solid #c7d2fe',
+                    zIndex: 60
+                }}>
+                    Aktualisiere...
+                </div>
+            )}
+
+            {/* Modal Overlay */}
+            {selectedEvent && (
                 <div
                     style={{
-                        height: HEADER_HEIGHT,
-                        background: COLOR_HEADER,
-                        backdropFilter: 'blur(10px)',
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
+                        background: theme.modalOverlay,
+                        backdropFilter: 'blur(6px)',
                         display: 'flex',
                         alignItems: 'center',
-                        padding: '0 10px',
-                        color: COLOR_TEXT,
-                        justifyContent: 'space-between',
-                        borderBottom: '1px solid rgba(255,255,255,0.1)',
-                        zIndex: 20
+                        justifyContent: 'center',
+                        zIndex: 100,
+                        touchAction: 'manipulation',
                     }}
+                    onClick={() => setSelectedEvent(null)}
                 >
-                    {/* Left Area & Prev Button */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <button
-                            onClick={(e) => { e.stopPropagation(); navigate(-1); }}
-                            style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: COLOR_TEXT,
-                                fontSize: '24px',
-                                cursor: 'pointer',
-                                width: 50,
-                                height: 50,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                opacity: 0.8
-                            }}>
-                            ◀
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); jumpToToday(); }} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: COLOR_TEXT, padding: '6px 16px', borderRadius: '20px', cursor: 'pointer', fontSize: '13px', fontWeight: 500 }}>Heute</button>
-                    </div>
-
-                    <div style={{ fontSize: '18px', fontWeight: 500, letterSpacing: '0.5px' }}>
-                        {view === 'MONTH'
-                            ? monthFormatter.format(date)
-                            : view === 'DAY'
-                                ? dateFormatter.format(date)
-                                : `Woche vom ${new Date(new Date(date).setDate(date.getDate() - (date.getDay() === 0 ? 6 : date.getDay() - 1))).toLocaleDateString('de-DE')}`
-                        }
-                    </div>
-
-                    {/* Right Area & Next Button */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', padding: '3px', borderRadius: '8px', marginRight: '5px' }}>
-                            {([['Tag', 'DAY'], ['Woche', 'WEEK'], ['Monat', 'MONTH']] as const).map(([label, v]) => (
-                                <button
-                                    key={v}
-                                    onClick={(e) => { e.stopPropagation(); setView(v); }}
-                                    style={{
-                                        background: view === v ? COLOR_ACCENT : 'transparent',
-                                        color: COLOR_TEXT,
-                                        border: 'none',
-                                        padding: '6px 10px',
-                                        borderRadius: '6px',
-                                        fontSize: '12px',
-                                        cursor: 'pointer',
-                                        transition: 'background 0.2s',
-                                        fontWeight: 500
-                                    }}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-                        <button
-                            onClick={(e) => { e.stopPropagation(); navigate(1); }}
-                            style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: COLOR_TEXT,
-                                fontSize: '24px',
-                                cursor: 'pointer',
-                                width: 50,
-                                height: 50,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                opacity: 0.8
-                            }}>
-                            ▶
-                        </button>
-                    </div>
-                </div>
-
-                {/* Views */}
-                <div style={{ padding: '0', height: `calc(100% - ${HEADER_HEIGHT}px)` }}>
-                    {view === 'MONTH' && <MonthView date={date} events={events} onEventClick={setSelectedEvent} />}
-                    {view === 'WEEK' && <WeekView date={date} events={events} onEventClick={setSelectedEvent} />}
-                    {view === 'DAY' && <DayView date={date} events={events} onEventClick={setSelectedEvent} />}
-                </div>
-
-                {/* Floating Legend */}
-                <div style={{
-                    position: 'absolute',
-                    bottom: 20,
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    display: 'flex',
-                    gap: '20px',
-                    background: 'rgba(20,20,30,0.9)',
-                    padding: '8px 16px',
-                    borderRadius: '30px',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    backdropFilter: 'blur(5px)',
-                    zIndex: 50
-                }}>
-                    {calendars.map(cal => (
-                        <div key={cal.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: COLOR_TEXT_DIM, fontSize: '12px' }}>
-                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: cal.color, boxShadow: `0 0 8px ${cal.color}` }}></div>
-                            {cal.name}
-                        </div>
-                    ))}
-                </div>
-
-                {/* Error indicator */}
-                {error && (
-                    <div style={{
-                        position: 'absolute',
-                        top: HEADER_HEIGHT + 10,
-                        right: 10,
-                        background: 'rgba(220, 38, 38, 0.9)',
-                        color: '#fff',
-                        padding: '8px 16px',
-                        borderRadius: '8px',
-                        fontSize: '12px',
-                        zIndex: 60
-                    }}>
-                        ⚠️ {error}
-                    </div>
-                )}
-
-                {/* Loading indicator */}
-                {loading && (
-                    <div style={{
-                        position: 'absolute',
-                        top: HEADER_HEIGHT + 10,
-                        right: 10,
-                        background: 'rgba(99, 102, 241, 0.9)',
-                        color: '#fff',
-                        padding: '8px 16px',
-                        borderRadius: '8px',
-                        fontSize: '12px',
-                        zIndex: 60
-                    }}>
-                        Aktualisiere...
-                    </div>
-                )}
-
-                {/* Modal Overlay */}
-                {selectedEvent && (
                     <div
                         style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            height: '100%',
-                            background: 'rgba(0,0,0,0.6)',
-                            backdropFilter: 'blur(4px)',
+                            background: theme.cardBg,
+                            borderTop: `4px solid ${selectedEvent.color}`,
+                            width: '90%',
+                            maxWidth: '500px',
+                            maxHeight: '85%',
                             display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            zIndex: 100,
-                            transition: 'all 0.3s'
+                            flexDirection: 'column',
+                            padding: '28px',
+                            borderRadius: '20px',
+                            boxShadow: darkMode ? '0 25px 60px rgba(0,0,0,0.5)' : '0 25px 60px rgba(0,0,0,0.15)',
+                            color: theme.text,
+                            animation: 'popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                         }}
-                        onClick={() => setSelectedEvent(null)}
+                        onClick={(e) => e.stopPropagation()}
                     >
-                        <div
-                            style={{
-                                background: '#161622',
-                                borderTop: `4px solid ${selectedEvent.color}`,
-                                width: '480px',
-                                maxWidth: '90%',
-                                maxHeight: '85%',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                padding: '25px',
-                                borderRadius: '16px',
-                                boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-                                color: COLOR_TEXT,
-                                animation: 'popIn 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <div style={{ marginBottom: '20px' }}>
-                                <div style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    background: 'rgba(255,255,255,0.05)',
-                                    padding: '4px 10px',
-                                    borderRadius: '20px',
-                                    fontSize: '11px',
-                                    color: selectedEvent.color,
-                                    marginBottom: '8px',
-                                    fontWeight: 600
-                                }}>
-                                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: selectedEvent.color }}></div>
-                                    {selectedEvent.calendar}
-                                </div>
-                                <h2 style={{ margin: '0', fontSize: '24px', lineHeight: '1.2', fontWeight: 600 }}>
-                                    {selectedEvent.title}
-                                </h2>
-                            </div>
-
-                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px', color: COLOR_TEXT_DIM }}>
-                                <span style={{ fontSize: '18px' }}>🕒</span>
-                                <div style={{ fontSize: '15px', lineHeight: '1.5' }}>
-                                    <div style={{ color: '#fff' }}>{dateFormatter.format(new Date(selectedEvent.start))}</div>
-                                    {timeFormatter.format(new Date(selectedEvent.start))} - {timeFormatter.format(new Date(selectedEvent.end))} Uhr
-                                </div>
-                            </div>
-
-                            {selectedEvent.location && (
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px', color: COLOR_TEXT_DIM }}>
-                                    <span style={{ fontSize: '18px' }}>📍</span>
-                                    <div style={{ fontSize: '15px' }}>{formatLocation(selectedEvent.location) || selectedEvent.location}</div>
-                                </div>
-                            )}
-
+                        <div style={{ marginBottom: '20px' }}>
                             <div style={{
-                                marginTop: '10px',
-                                paddingTop: '20px',
-                                borderTop: `1px solid ${COLOR_GRID}`,
-                                fontSize: '14px',
-                                lineHeight: '1.6',
-                                color: '#D1D5DB',
-                                whiteSpace: 'pre-wrap',
-                                overflowY: 'auto',
-                                flex: 1,
-                                minHeight: 0,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                background: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                padding: '6px 12px',
+                                borderRadius: '20px',
+                                fontSize: '13px',
+                                color: selectedEvent.color,
+                                marginBottom: '10px',
+                                fontWeight: 600
                             }}>
-                                {selectedEvent.description || <span style={{ fontStyle: 'italic', opacity: 0.5 }}>Keine Beschreibung verfügbar.</span>}
+                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: selectedEvent.color }}></div>
+                                {selectedEvent.calendar}
                             </div>
-
-                            <button
-                                onClick={() => setSelectedEvent(null)}
-                                style={{
-                                    marginTop: '25px',
-                                    width: '100%',
-                                    padding: '12px',
-                                    background: 'rgba(255,255,255,0.05)',
-                                    border: 'none',
-                                    color: COLOR_TEXT,
-                                    borderRadius: '8px',
-                                    cursor: 'pointer',
-                                    fontWeight: 500,
-                                    transition: 'background 0.2s'
-                                }}
-                                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                            >
-                                Schließen
-                            </button>
+                            <h2 style={{ margin: '0', fontSize: '26px', lineHeight: '1.3', fontWeight: 600 }}>
+                                {selectedEvent.title}
+                            </h2>
                         </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', marginBottom: '18px', color: theme.textDim }}>
+                            <span style={{ fontSize: '20px' }}>🕒</span>
+                            <div style={{ fontSize: '16px', lineHeight: '1.5' }}>
+                                <div style={{ color: theme.text }}>{dateFormatter.format(new Date(selectedEvent.start))}</div>
+                                {timeFormatter.format(new Date(selectedEvent.start))} - {timeFormatter.format(new Date(selectedEvent.end))} Uhr
+                            </div>
+                        </div>
+
+                        {selectedEvent.location && (
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', marginBottom: '18px', color: theme.textDim }}>
+                                <span style={{ fontSize: '20px' }}>📍</span>
+                                <div style={{ fontSize: '16px' }}>{formatLocation(selectedEvent.location) || selectedEvent.location}</div>
+                            </div>
+                        )}
+
+                        <div style={{
+                            marginTop: '12px',
+                            paddingTop: '20px',
+                            borderTop: `1px solid ${theme.grid}`,
+                            fontSize: '15px',
+                            lineHeight: '1.7',
+                            color: theme.textDim,
+                            whiteSpace: 'pre-wrap',
+                            overflowY: 'auto',
+                            flex: 1,
+                            minHeight: 0,
+                        }}>
+                            {selectedEvent.description || <span style={{ fontStyle: 'italic', opacity: 0.5 }}>Keine Beschreibung verfügbar.</span>}
+                        </div>
+
+                        <button
+                            onClick={() => setSelectedEvent(null)}
+                            style={{
+                                marginTop: '24px',
+                                width: '100%',
+                                padding: '16px',
+                                background: theme.buttonBg,
+                                border: 'none',
+                                color: theme.text,
+                                borderRadius: '12px',
+                                cursor: 'pointer',
+                                fontWeight: 600,
+                                fontSize: '16px',
+                                transition: 'background 0.2s',
+                                minHeight: 52,
+                                touchAction: 'manipulation',
+                            }}
+                        >
+                            Schließen
+                        </button>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
+            
             <style jsx global>{`
-        @keyframes popIn {
-          from { opacity: 0; transform: scale(0.95) translateY(10px); }
-          to { opacity: 1; transform: scale(1) translateY(0); }
-        }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #333; borderRadius: 3px; }
-        body { margin: 0; padding: 0; overflow: hidden; }
-      `}</style>
+                @keyframes popIn {
+                    from { opacity: 0; transform: scale(0.95) translateY(10px); }
+                    to { opacity: 1; transform: scale(1) translateY(0); }
+                }
+                ::-webkit-scrollbar { width: 8px; }
+                ::-webkit-scrollbar-track { background: transparent; }
+                ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+                ::-webkit-scrollbar-thumb:hover { background: #555; }
+                body { 
+                    margin: 0; 
+                    padding: 0; 
+                    overflow: hidden; 
+                    -webkit-touch-callout: none;
+                    -webkit-user-select: none;
+                    touch-action: manipulation;
+                }
+                * {
+                    -webkit-tap-highlight-color: transparent;
+                }
+            `}</style>
         </div>
     );
 }
-
-// Import view components from simulator (reuse the same components)
-// For now, copy them here - in production you might want to extract to shared components
 
 function computeEventLayout(events: CalendarEvent[]) {
     const sorted = [...events].sort((a, b) => {
@@ -585,7 +710,7 @@ function computeEventLayout(events: CalendarEvent[]) {
     return processedLayout;
 }
 
-function MonthView({ date, events, onEventClick }: { date: Date; events: CalendarEvent[], onEventClick: (e: CalendarEvent) => void }) {
+function MonthView({ date, events, onEventClick, theme }: { date: Date; events: CalendarEvent[], onEventClick: (e: CalendarEvent) => void, theme: Theme }) {
     const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
     let startDayOfWeek = firstDay.getDay() - 1;
     if (startDayOfWeek < 0) startDayOfWeek = 6;
@@ -602,16 +727,17 @@ function MonthView({ date, events, onEventClick }: { date: Date; events: Calenda
 
     const today = new Date();
     const currentMonth = date.getMonth();
+    const isDark = theme.bg === themes.dark.bg;
 
     return (
         <div style={{ height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', height: 40, flexShrink: 0, alignItems: 'center', borderBottom: `1px solid ${COLOR_GRID}`, color: COLOR_TEXT_DIM, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+            <div style={{ display: 'flex', height: 44, flexShrink: 0, alignItems: 'center', borderBottom: `1px solid ${theme.grid}`, color: theme.textDim, fontSize: '14px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
                 {['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(d => (
                     <div key={d} style={{ flex: 1, textAlign: 'center' }}>{d}</div>
                 ))}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: `repeat(7, 1fr)`, minHeight: '100%' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(7, 1fr)`, flex: 1 }}>
                 {days.map((d, i) => {
                     const isCurrentMonth = d.getMonth() === currentMonth;
                     const isToday = d.toDateString() === today.toDateString();
@@ -624,48 +750,50 @@ function MonthView({ date, events, onEventClick }: { date: Date; events: Calenda
                         const dayEnd = new Date(d);
                         dayEnd.setHours(23, 59, 59, 999);
                         return start < dayEnd && end > dayStart;
-                    }).slice(0, 5);
+                    }).slice(0, 4);
 
                     return (
                         <div key={i} style={{
-                            borderRight: `1px solid ${COLOR_GRID}`,
-                            borderBottom: `1px solid ${COLOR_GRID}`,
-                            background: isToday ? COLOR_TODAY_BG : (isCurrentMonth ? 'transparent' : 'rgba(255,255,255,0.02)'),
-                            padding: '4px',
+                            borderRight: `1px solid ${theme.grid}`,
+                            borderBottom: `1px solid ${theme.grid}`,
+                            background: isToday ? theme.todayBg : (isCurrentMonth ? 'transparent' : (isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)')),
+                            padding: '6px',
                             overflow: 'hidden',
-                            minHeight: 100,
                             opacity: isCurrentMonth ? 1 : 0.5
                         }}>
                             <div style={{
                                 textAlign: 'center',
-                                marginBottom: '4px',
-                                color: isToday ? '#fff' : (isCurrentMonth ? COLOR_TEXT_DIM : '#4B5563'),
+                                marginBottom: '6px',
+                                color: isToday ? '#fff' : (isCurrentMonth ? theme.textDim : (isDark ? '#4B5563' : '#94a3b8')),
                                 fontWeight: isToday ? 'bold' : 'normal',
-                                background: isToday ? COLOR_ACCENT : 'transparent',
-                                width: 24,
-                                height: 24,
-                                lineHeight: '24px',
+                                background: isToday ? theme.accent : 'transparent',
+                                width: 28,
+                                height: 28,
+                                lineHeight: '28px',
                                 borderRadius: '50%',
-                                margin: '0 auto 4px auto',
-                                fontSize: '13px'
+                                margin: '0 auto 6px auto',
+                                fontSize: '14px'
                             }}>
                                 {d.getDate()}
                             </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                 {dayEvents.map(e => (
                                     <div
                                         key={e.id}
-                                        onClick={() => onEventClick(e)}
+                                        onClick={(ev) => { ev.stopPropagation(); onEventClick(e); }}
                                         style={{
-                                            background: e.color + '40',
+                                            background: isDark ? (e.color + '40') : (e.color + '20'),
                                             borderLeft: `3px solid ${e.color}`,
-                                            fontSize: '11px',
-                                            color: '#eee',
+                                            fontSize: '12px',
+                                            color: isDark ? '#eee' : '#1e293b',
                                             whiteSpace: 'nowrap',
                                             overflow: 'hidden',
-                                            borderRadius: '2px',
-                                            padding: '2px 4px',
-                                            cursor: 'pointer'
+                                            borderRadius: '3px',
+                                            padding: '4px 6px',
+                                            cursor: 'pointer',
+                                            fontWeight: 500,
+                                            minHeight: 24,
+                                            touchAction: 'manipulation',
                                         }}>
                                         {e.title}
                                     </div>
@@ -675,185 +803,188 @@ function MonthView({ date, events, onEventClick }: { date: Date; events: Calenda
                     );
                 })}
             </div>
-            <div style={{ height: 60, flexShrink: 0 }}></div>
+            <div style={{ height: 70, flexShrink: 0 }}></div>
         </div>
     )
 }
 
-function WeekView({ date, events, onEventClick }: { date: Date; events: CalendarEvent[], onEventClick: (e: CalendarEvent) => void }) {
+function WeekView({ date, events, onEventClick, theme }: { date: Date; events: CalendarEvent[], onEventClick: (e: CalendarEvent) => void, theme: Theme }) {
     const today = new Date();
     const weekStart = new Date(date);
     const day = weekStart.getDay();
     const diff = weekStart.getDate() - day + (day === 0 ? -6 : 1);
     weekStart.setDate(diff);
 
-    const leftMargin = 50;
-    const colW = (SCREEN_WIDTH - leftMargin) / 7;
+    const leftMargin = 56;
     const startHour = 7;
     const endHour = 20;
+    const isDark = theme.bg === themes.dark.bg;
+
+    // Pre-compute events for each day to ensure correct assignment
+    const eventsByDay: CalendarEvent[][] = Array.from({ length: 7 }, () => []);
+    for (const e of events) {
+        const start = new Date(e.start);
+        const end = new Date(e.end);
+        const eventStartDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        const eventEndDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+        const isMultiDay = eventStartDay.getTime() !== eventEndDay.getTime();
+        
+        for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+            const colDate = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + dayIdx);
+            const colDateMidnight = new Date(colDate.getFullYear(), colDate.getMonth(), colDate.getDate());
+            
+            if (!isMultiDay) {
+                // Single-day event: only show on its start day
+                if (eventStartDay.getTime() === colDateMidnight.getTime()) {
+                    eventsByDay[dayIdx].push(e);
+                }
+            } else {
+                // Multi-day event: show on all overlapping days
+                const dayStart = new Date(colDate.getFullYear(), colDate.getMonth(), colDate.getDate(), 0, 0, 0);
+                const dayEnd = new Date(colDate.getFullYear(), colDate.getMonth(), colDate.getDate(), 23, 59, 59);
+                if (start < dayEnd && end > dayStart) {
+                    eventsByDay[dayIdx].push(e);
+                }
+            }
+        }
+    }
 
     return (
         <div style={{ height: '100%', overflowY: 'auto', position: 'relative' }}>
-            <div style={{ display: 'flex', paddingLeft: leftMargin, borderBottom: `1px solid ${COLOR_GRID}`, position: 'sticky', top: 0, background: COLOR_BG, zIndex: 5, height: 45 }}>
+            {/* Header row */}
+            <div style={{ display: 'grid', gridTemplateColumns: `${leftMargin}px repeat(7, 1fr)`, borderBottom: `1px solid ${theme.grid}`, position: 'sticky', top: 0, background: theme.bg, zIndex: 5, height: 52 }}>
+                <div /> {/* Empty cell for time column */}
                 {Array.from({ length: 7 }).map((_, i) => {
-                    const d = new Date(weekStart);
-                    d.setDate(weekStart.getDate() + i);
+                    const d = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i);
                     const isToday = d.toDateString() === today.toDateString();
                     return (
                         <div key={i} style={{
-                            flex: 1,
                             textAlign: 'center',
-                            color: isToday ? '#fff' : COLOR_TEXT_DIM,
-                            background: isToday ? COLOR_TODAY_BG : 'transparent',
+                            color: isToday ? (isDark ? '#fff' : theme.accent) : theme.textDim,
+                            background: isToday ? theme.todayBg : 'transparent',
                             padding: '8px 0',
-                            borderRight: `1px solid ${COLOR_GRID}`
+                            borderRight: `1px solid ${theme.grid}`,
+                            fontWeight: 500,
                         }}>
-                            <div style={{ fontSize: '11px', textTransform: 'uppercase', opacity: 0.7 }}>{weekdayShort[d.getDay()]}</div>
-                            <div style={{ fontSize: '18px', fontWeight: isToday ? 600 : 400 }}>{d.getDate()}</div>
+                            <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.7 }}>{weekdayShort[d.getDay()]}</div>
+                            <div style={{ fontSize: '20px', fontWeight: isToday ? 700 : 500 }}>{d.getDate()}</div>
                         </div>
                     );
                 })}
             </div>
 
-            <div style={{ position: 'relative', height: (endHour - startHour + 1) * HOUR_HEIGHT, paddingBottom: 80 }}>
-                {Array.from({ length: endHour - startHour + 1 }).map((_, i) => {
-                    const h = startHour + i;
+            {/* Grid: time column + 7 day columns */}
+            <div style={{ display: 'grid', gridTemplateColumns: `${leftMargin}px repeat(7, 1fr)`, height: (endHour - startHour + 1) * HOUR_HEIGHT, paddingBottom: 80, position: 'relative' }}>
+                {/* Time labels column */}
+                <div style={{ position: 'relative' }}>
+                    {Array.from({ length: endHour - startHour + 1 }).map((_, i) => (
+                        <div key={i} style={{ position: 'absolute', top: i * HOUR_HEIGHT, left: 0, right: 0, height: HOUR_HEIGHT }}>
+                            <span style={{ position: 'absolute', left: 10, top: -9, color: theme.textDim, fontSize: '12px', fontWeight: 500 }}>{startHour + i}</span>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Day columns */}
+                {Array.from({ length: 7 }).map((_, dayIdx) => {
+                    const dayEvents = eventsByDay[dayIdx];
+                    const layout = computeEventLayout(dayEvents);
+                    const d = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + dayIdx);
+                    const isToday = d.toDateString() === today.toDateString();
+
                     return (
-                        <div key={h} style={{
-                            position: 'absolute',
-                            top: i * HOUR_HEIGHT,
-                            left: 0,
-                            right: 0,
-                            borderTop: `1px solid ${COLOR_GRID}`,
-                            height: HOUR_HEIGHT
-                        }}>
-                            <span style={{ position: 'absolute', left: 8, top: -8, color: COLOR_TEXT_DIM, fontSize: '11px' }}>{h}</span>
+                        <div key={dayIdx} style={{ position: 'relative', borderLeft: `1px solid ${theme.grid}` }}>
+                            {/* Hour grid lines */}
+                            {Array.from({ length: endHour - startHour + 1 }).map((_, i) => (
+                                <div key={i} style={{ position: 'absolute', top: i * HOUR_HEIGHT, left: 0, right: 0, borderTop: `1px solid ${theme.grid}`, height: HOUR_HEIGHT, pointerEvents: 'none' }} />
+                            ))}
+
+                            {/* Events for this day */}
+                            {dayEvents.map(e => {
+                                const start = new Date(e.start);
+                                const end = new Date(e.end);
+                                let startH = start.getHours() + start.getMinutes() / 60;
+                                let endH = end.getHours() + end.getMinutes() / 60;
+                                if (startH < startHour) startH = startHour;
+                                if (endH > endHour) endH = endHour;
+
+                                const top = (startH - startHour) * HOUR_HEIGHT;
+                                const height = (endH - startH) * HOUR_HEIGHT;
+                                if (height <= 0) return null;
+
+                                const showLoc = height > 40 && e.location;
+                                const { left: layoutLeft, width: layoutWidth } = layout.get(e.id) || { left: 0, width: 100 };
+
+                                return (
+                                    <div
+                                        key={e.id}
+                                        onClick={(ev) => { ev.stopPropagation(); onEventClick(e); }}
+                                        style={{
+                                            position: 'absolute',
+                                            boxSizing: 'border-box',
+                                            left: `calc(${layoutLeft}% + 2px)`,
+                                            width: `calc(${layoutWidth}% - 4px)`,
+                                            top: top + 1,
+                                            height: height - 2,
+                                            background: e.color,
+                                            borderRadius: '8px',
+                                            padding: '6px 8px',
+                                            color: '#fff',
+                                            fontSize: '12px',
+                                            overflow: 'hidden',
+                                            cursor: 'pointer',
+                                            zIndex: 1,
+                                            boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                                            border: '1px solid rgba(255,255,255,0.2)',
+                                            minWidth: 30,
+                                            touchAction: 'manipulation',
+                                        }}>
+                                        <div style={{ fontWeight: 600 }}>{e.title}</div>
+                                        {showLoc && (
+                                            <div style={{ marginTop: '3px', fontSize: '11px', opacity: 0.9, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                                                📍{formatLocation(e.location)}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+
+                            {/* Current time indicator for today */}
+                            {isToday && (() => {
+                                const now = new Date();
+                                const nowH = now.getHours() + now.getMinutes() / 60;
+                                if (nowH >= startHour && nowH <= endHour) {
+                                    return (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: (nowH - startHour) * HOUR_HEIGHT,
+                                            left: 0,
+                                            right: 0,
+                                            height: 2,
+                                            background: '#f43f5e',
+                                            zIndex: 10,
+                                            pointerEvents: 'none'
+                                        }}>
+                                            <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#f43f5e', marginTop: -4, marginLeft: -5 }} />
+                                        </div>
+                                    );
+                                }
+                                return null;
+                            })()}
                         </div>
                     );
                 })}
-
-                {Array.from({ length: 7 }).map((_, dayIdx) => {
-                    const d = new Date(weekStart);
-                    d.setDate(weekStart.getDate() + dayIdx);
-                    const dayStartTimestamp = new Date(d);
-                    dayStartTimestamp.setHours(0, 0, 0, 0);
-                    const dayEndTimestamp = new Date(d);
-                    dayEndTimestamp.setHours(23, 59, 59, 999);
-
-                    const dayEvents = events.filter(e => {
-                        const start = new Date(e.start);
-                        const end = new Date(e.end);
-                        return start < dayEndTimestamp && end > dayStartTimestamp;
-                    });
-
-                    const layout = computeEventLayout(dayEvents);
-
-                    return dayEvents.map(e => {
-                        const start = new Date(e.start);
-                        const end = new Date(e.end);
-
-                        let startH = start.getHours() + start.getMinutes() / 60;
-                        let endH = end.getHours() + end.getMinutes() / 60;
-
-                        if (startH < startHour) startH = startHour;
-                        if (endH > endHour) endH = endHour;
-
-                        const top = (startH - startHour) * HOUR_HEIGHT;
-                        const height = (endH - startH) * HOUR_HEIGHT;
-
-                        if (height <= 0) return null;
-
-                        const showLoc = height > 35 && e.location;
-                        const colPadding = 2;
-
-                        const overlappingEvents = dayEvents.filter(other => {
-                            if (other.id === e.id) return false;
-                            const otherStart = new Date(other.start);
-                            const otherEnd = new Date(other.end);
-                            let otherStartH = otherStart.getHours() + otherStart.getMinutes() / 60;
-                            let otherEndH = otherEnd.getHours() + otherEnd.getMinutes() / 60;
-                            return Math.max(startH, otherStartH) < Math.min(endH, otherEndH);
-                        });
-
-                        let pixelLeft: number;
-                        let pixelWidth: number;
-
-                        if (overlappingEvents.length === 0) {
-                            pixelLeft = leftMargin + dayIdx * colW + colPadding;
-                            pixelWidth = colW - (colPadding * 2);
-                        } else {
-                            const { left, width } = layout.get(e.id) || { left: 0, width: 100 };
-                            const usableColW = colW - (colPadding * 2);
-                            pixelLeft = leftMargin + dayIdx * colW + colPadding + (usableColW * (left / 100));
-                            pixelWidth = (usableColW * (width / 100)) - colPadding;
-                            if (pixelWidth < 20) pixelWidth = 20;
-                        }
-
-                        return (
-                            <div
-                                key={e.id}
-                                onClick={() => onEventClick(e)}
-                                style={{
-                                    position: 'absolute',
-                                    boxSizing: 'border-box',
-                                    left: pixelLeft,
-                                    width: Math.max(pixelWidth, 20),
-                                    top: top + 1,
-                                    height: height - 2,
-                                    background: e.color,
-                                    borderRadius: '6px',
-                                    padding: '4px 6px',
-                                    color: '#fff',
-                                    fontSize: '11px',
-                                    overflow: 'hidden',
-                                    cursor: 'pointer',
-                                    zIndex: 1,
-                                    boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
-                                    border: '1px solid rgba(255,255,255,0.2)'
-                                }}>
-                                <div style={{ fontWeight: 600 }}>{e.title}</div>
-                                {showLoc && (
-                                    <div style={{
-                                        marginTop: '2px',
-                                        fontSize: '10px',
-                                        opacity: 0.9,
-                                        whiteSpace: 'nowrap',
-                                        textOverflow: 'ellipsis',
-                                        overflow: 'hidden'
-                                    }}>
-                                        📍{formatLocation(e.location)}
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    });
-                })}
-
-                {date.toDateString() === new Date().toDateString() && (
-                    <div style={{
-                        position: 'absolute',
-                        top: (new Date().getHours() - startHour + new Date().getMinutes() / 60) * HOUR_HEIGHT,
-                        left: leftMargin,
-                        right: 0,
-                        height: 2,
-                        background: '#f43f5e',
-                        zIndex: 2,
-                        pointerEvents: 'none'
-                    }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f43f5e', marginTop: -3, marginLeft: -4 }}></div>
-                    </div>
-                )}
             </div>
         </div>
     );
 }
 
-function DayView({ date, events, onEventClick }: { date: Date; events: CalendarEvent[], onEventClick: (e: CalendarEvent) => void }) {
+function DayView({ date, events, onEventClick, theme }: { date: Date; events: CalendarEvent[], onEventClick: (e: CalendarEvent) => void, theme: Theme }) {
     const today = new Date();
     const isToday = date.toDateString() === today.toDateString();
+    const isDark = theme.bg === themes.dark.bg;
 
     const hourH = HOUR_HEIGHT;
-    const leftMargin = 70;
+    const leftMargin = 80;
     const startHour = 7;
     const endHour = 20;
 
@@ -872,84 +1003,108 @@ function DayView({ date, events, onEventClick }: { date: Date; events: CalendarE
 
     return (
         <div style={{ height: '100%', overflowY: 'auto' }}>
-            <div style={{ padding: '10px 0 10px 70px', color: isToday ? '#fff' : COLOR_TEXT, fontSize: '24px', fontWeight: 300 }}>
-                <span style={{ fontWeight: 600 }}>{dateFormatter.format(date)}</span>
-                {isToday && <span style={{ marginLeft: '10px', fontSize: '14px', background: COLOR_ACCENT, padding: '2px 8px', borderRadius: '10px', verticalAlign: 'middle' }}>HEUTE</span>}
+            <div style={{ padding: '14px 0 14px 80px', color: isToday ? (isDark ? '#fff' : theme.accent) : theme.text, fontSize: '26px', fontWeight: 300 }}>
+                <span style={{ fontWeight: 700 }}>{dateFormatter.format(date)}</span>
+                {isToday && <span style={{ marginLeft: '12px', fontSize: '15px', background: theme.accent, color: '#fff', padding: '4px 12px', borderRadius: '12px', verticalAlign: 'middle', fontWeight: 600 }}>HEUTE</span>}
             </div>
 
-            <div style={{ position: 'relative', height: (endHour - startHour + 1) * hourH, paddingBottom: 80 }}>
-                {Array.from({ length: endHour - startHour + 1 }).map((_, i) => {
-                    const h = startHour + i;
-                    return (
-                        <div key={h} style={{
-                            position: 'absolute',
-                            top: i * hourH,
-                            left: 0,
-                            right: 20,
-                            borderTop: `1px solid ${COLOR_GRID}`,
-                            height: hourH
-                        }}>
-                            <span style={{ position: 'absolute', left: 15, top: -12, color: COLOR_TEXT_DIM, fontSize: '14px' }}>{h}:00</span>
+            {/* Grid layout: time column + events column */}
+            <div style={{ display: 'grid', gridTemplateColumns: `${leftMargin}px 1fr`, height: (endHour - startHour + 1) * hourH, paddingBottom: 80, paddingRight: 20 }}>
+                {/* Time labels column */}
+                <div style={{ position: 'relative' }}>
+                    {Array.from({ length: endHour - startHour + 1 }).map((_, i) => (
+                        <div key={i} style={{ position: 'absolute', top: i * hourH, left: 0, right: 0, height: hourH }}>
+                            <span style={{ position: 'absolute', left: 18, top: -12, color: theme.textDim, fontSize: '15px', fontWeight: 500 }}>{startHour + i}:00</span>
                         </div>
-                    );
-                })}
+                    ))}
+                </div>
 
-                {dayEvents.map(e => {
-                    const start = new Date(e.start);
-                    const end = new Date(e.end);
+                {/* Events column */}
+                <div style={{ position: 'relative' }}>
+                    {/* Hour grid lines */}
+                    {Array.from({ length: endHour - startHour + 1 }).map((_, i) => (
+                        <div key={i} style={{ position: 'absolute', top: i * hourH, left: 0, right: 0, borderTop: `1px solid ${theme.grid}`, height: hourH, pointerEvents: 'none' }} />
+                    ))}
 
-                    let startH = start.getHours() + start.getMinutes() / 60;
-                    let endH = end.getHours() + end.getMinutes() / 60;
+                    {/* Events */}
+                    {dayEvents.map(e => {
+                        const start = new Date(e.start);
+                        const end = new Date(e.end);
 
-                    if (startH < startHour) startH = startHour;
-                    if (endH > endHour) endH = endHour;
+                        let startH = start.getHours() + start.getMinutes() / 60;
+                        let endH = end.getHours() + end.getMinutes() / 60;
 
-                    const top = (startH - startHour) * hourH;
-                    const height = (endH - startH) * hourH;
+                        if (startH < startHour) startH = startHour;
+                        if (endH > endHour) endH = endHour;
 
-                    if (height <= 0) return null;
+                        const top = (startH - startHour) * hourH;
+                        const height = (endH - startH) * hourH;
 
-                    const showLoc = height > 60 && e.location;
-                    const { left, width } = layout.get(e.id) || { left: 0, width: 100 };
+                        if (height <= 0) return null;
 
-                    const totalW = SCREEN_WIDTH - leftMargin - 30;
-                    const pixelLeft = leftMargin + (totalW * (left / 100));
-                    const pixelWidth = (totalW * (width / 100)) - 10;
+                        const showLoc = height > 70 && e.location;
+                        const { left, width } = layout.get(e.id) || { left: 0, width: 100 };
 
-                    return (
-                        <div
-                            key={e.id}
-                            onClick={() => onEventClick(e)}
-                            style={{
-                                position: 'absolute',
-                                left: pixelLeft,
-                                width: pixelWidth,
-                                top: top,
-                                height: height,
-                                background: e.color,
-                                borderRadius: '8px',
-                                padding: '8px 12px',
-                                color: '#fff',
-                                overflow: 'hidden',
-                                cursor: 'pointer',
-                                boxShadow: '0 4px 10px rgba(0,0,0,0.2)',
-                                borderLeft: '4px solid rgba(0,0,0,0.2)'
-                            }}>
-                            <div style={{ fontWeight: 700, fontSize: '14px' }}>{e.title}</div>
-                            <div style={{ fontSize: '13px', opacity: 0.9 }}>
-                                {timeFormatter.format(start)} - {timeFormatter.format(end)}
-                            </div>
-                            {showLoc && (
-                                <div style={{ fontSize: '13px', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                    <span>📍</span>
-                                    <span style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
-                                        {formatLocation(e.location)}
-                                    </span>
+                        return (
+                            <div
+                                key={e.id}
+                                onClick={(ev) => { ev.stopPropagation(); onEventClick(e); }}
+                                style={{
+                                    position: 'absolute',
+                                    left: `calc(${left}% + 4px)`,
+                                    width: `calc(${width}% - 8px)`,
+                                    top: top,
+                                    height: height,
+                                    background: e.color,
+                                    borderRadius: '10px',
+                                    padding: '10px 14px',
+                                    color: '#fff',
+                                    overflow: 'hidden',
+                                    cursor: 'pointer',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+                                    borderLeft: '5px solid rgba(0,0,0,0.2)',
+                                    touchAction: 'manipulation',
+                                    boxSizing: 'border-box',
+                                }}>
+                                <div style={{ fontWeight: 700, fontSize: '16px' }}>{e.title}</div>
+                                <div style={{ fontSize: '14px', opacity: 0.9, marginTop: '4px' }}>
+                                    {timeFormatter.format(start)} - {timeFormatter.format(end)}
                                 </div>
-                            )}
-                        </div>
-                    );
-                })}
+                                {showLoc && (
+                                    <div style={{ fontSize: '14px', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <span>📍</span>
+                                        <span style={{ whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                                            {formatLocation(e.location)}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+
+                    {/* Current time indicator for today */}
+                    {isToday && (() => {
+                        const now = new Date();
+                        const nowH = now.getHours() + now.getMinutes() / 60;
+                        if (nowH >= startHour && nowH <= endHour) {
+                            return (
+                                <div style={{
+                                    position: 'absolute',
+                                    top: (nowH - startHour) * hourH,
+                                    left: 0,
+                                    right: 0,
+                                    height: 2,
+                                    background: '#f43f5e',
+                                    zIndex: 10,
+                                    pointerEvents: 'none'
+                                }}>
+                                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#f43f5e', marginTop: -4, marginLeft: -5 }} />
+                                </div>
+                            );
+                        }
+                        return null;
+                    })()}
+                </div>
             </div>
         </div>
     );

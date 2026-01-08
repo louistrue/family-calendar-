@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Family Calendar Kiosk
-Exec=/home/pi/family-calendar/raspberry-pi/start-kiosk.sh
+Exec=/home/louistrue/family-calendar/raspberry-pi/start-kiosk.sh
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
