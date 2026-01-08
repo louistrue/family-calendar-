@@ -77,6 +77,32 @@ async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date
       const masterComp = components.find(c => !c.getFirstPropertyValue('recurrence-id'));
       const exceptions = components.filter(c => c.getFirstPropertyValue('recurrence-id'));
 
+      // Helper to convert ICAL.Time to JS Date, respecting all-day events
+      const icalTimeToDate = (icalTime: any): Date => {
+        if (!icalTime) return new Date();
+
+        // For all-day events (DATE type, not DATE-TIME), create date without timezone conversion
+        if (icalTime.isDate) {
+          return new Date(icalTime.year, icalTime.month - 1, icalTime.day, 0, 0, 0, 0);
+        }
+
+        // For timed events, use toJSDate() which handles timezone properly
+        return icalTime.toJSDate();
+      };
+
+      // Helper to get a normalized timestamp for comparing recurrence instances
+      const getNormalizedTimestamp = (icalTime: any): number => {
+        if (!icalTime) return 0;
+
+        // For all-day events, use year/month/day only to avoid timezone shifts
+        if (icalTime.isDate) {
+          return new Date(icalTime.year, icalTime.month - 1, icalTime.day).getTime();
+        }
+
+        // For timed events, convert to UTC timestamp
+        return icalTime.toUnixTime() * 1000;
+      };
+
       // Helper to process a single event instance
       const processEvent = (event: ICAL.Event, start: Date, end: Date) => {
         // Skip cancelled
@@ -118,17 +144,19 @@ async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date
           const exceptionDates = new Set<number>();
           for (const ex of exceptions) {
             const rid = ex.getFirstPropertyValue('recurrence-id');
-            if (rid && typeof rid === 'object' && 'toJSDate' in rid) {
-              exceptionDates.add(rid.toJSDate().getTime());
+            if (rid) {
+              exceptionDates.add(getNormalizedTimestamp(rid));
             }
           }
 
           while ((next = iterator.next()) && count < maxOccurrences) {
-            const start = next.toJSDate();
+            // Convert ICAL.Time to proper JS Date respecting all-day events
+            const start = icalTimeToDate(next);
 
             // If this date is covered by an exception (override), skip it here
             // (The exception will be processed separately or is a cancellation)
-            if (exceptionDates.has(start.getTime())) {
+            const normalizedTimestamp = getNormalizedTimestamp(next);
+            if (exceptionDates.has(normalizedTimestamp)) {
               continue;
             }
 
@@ -139,15 +167,16 @@ async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date
 
             if (end < rangeStart) continue;
 
-            processEvent(masterEvent, start, end); // Use shared helper but careful with overrides
+            processEvent(masterEvent, start, end);
             count++;
           }
         } else {
           // Master is not recurring
-          const start = masterEvent.startDate.toJSDate();
+          const start = icalTimeToDate(masterEvent.startDate);
           const duration = masterEvent.duration;
-          const end = masterEvent.endDate ? masterEvent.endDate.toJSDate() :
-            new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
+          const end = masterEvent.endDate
+            ? icalTimeToDate(masterEvent.endDate)
+            : new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
           processEvent(masterEvent, start, end);
         }
       }
@@ -160,10 +189,11 @@ async function fetchICS(config: CalendarConfig, rangeStart: Date, rangeEnd: Date
         // We already skipped the "original" time in the master loop above.
         // Now just add this event as is (if not cancelled).
 
-        const start = exEvent.startDate.toJSDate();
+        const start = icalTimeToDate(exEvent.startDate);
         const duration = exEvent.duration;
-        const end = exEvent.endDate ? exEvent.endDate.toJSDate() :
-          new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
+        const end = exEvent.endDate
+          ? icalTimeToDate(exEvent.endDate)
+          : new Date(start.getTime() + (duration ? duration.toSeconds() * 1000 : 0));
 
         processEvent(exEvent, start, end);
       }

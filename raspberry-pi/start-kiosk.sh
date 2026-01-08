@@ -35,15 +35,24 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
 else
     # Configure your display URL here
     # Format: http://localhost:3000/display?apiKey=YOUR_KEY&view=WEEK&refresh=15
-    API_KEY="YOUR_API_KEY_HERE"
+    API_KEY="To the moon and back"
     VIEW="WEEK"
     REFRESH_INTERVAL="15"
 
     KIOSK_URL="http://localhost:3000/display?apiKey=$API_KEY&view=$VIEW&refresh=$REFRESH_INTERVAL"
 fi
 
-# Start Chromium in kiosk mode
-chromium-browser \
+# =============================================================================
+# DISPLAY SCALING - Adjust based on your screen and preference
+# =============================================================================
+# For 7" touchscreen (800x480): use 1.0 or 1.1
+# For 7" touchscreen (1024x600): use 1.25 - 1.5
+# For 10" touchscreen: use 1.25 - 1.5
+# For larger screens: use 1.0 - 1.25
+SCALE_FACTOR="1.35"
+
+# Start Chromium in kiosk mode with full touch support
+chromium \
     --kiosk \
     --noerrdialogs \
     --disable-infobars \
@@ -58,4 +67,11 @@ chromium-browser \
     --disk-cache-dir=/dev/null \
     --password-store=basic \
     --use-gl=egl \
+    --touch-events=enabled \
+    --enable-touch-drag-drop \
+    --enable-pinch \
+    --force-device-scale-factor=$SCALE_FACTOR \
+    --enable-features=TouchpadOverscrollHistoryNavigation \
+    --disable-smooth-scrolling \
+    --enable-accelerated-overflow-scroll \
     "$KIOSK_URL"

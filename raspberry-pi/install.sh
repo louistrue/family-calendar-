@@ -37,7 +37,7 @@ fi
 echo "📦 Installing required packages..."
 sudo apt-get install -y \
     git \
-    chromium-browser \
+    chromium \
     x11-xserver-utils \
     unclutter \
     xdotool
